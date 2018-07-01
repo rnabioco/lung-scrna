@@ -1,0 +1,658 @@
+---
+title: "Pseudotemporal ordering"
+author: "Kent Riemondy RBI"
+date: "5/20/2018"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache.lazy = FALSE)
+```
+
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+library(monocle)
+source("../../R/globals.R")
+data_dir <- file.path(data_dir, "updated")
+```
+
+## Pseudotime analysis
+
+Use pseudotime analysis to infer developmental trajectory from proliferating injured type II cell to a type I cell. 
+
+## Run pseudotime
+
+First load the stored seurat object and use the res1.2 clustering:
+
+```{r load_dat}
+atcells <- readRDS("s_obj2.rds")
+
+atcells_cluster_markers <- suppressMessages(read_tsv("markers/td_injured_markers_wilcox.txt"))
+  
+atcells <- SetAllIdent(atcells, "labeled_clusters")
+ 
+dir.create("ptime") 
+if (!file.exists("ptime/pt.rds")){
+  atm <- importCDS(atcells)
+    
+    #Next drop clusters to keep only TYPE 1 or TYPE 2 derived cell types.
+    
+    # drop_clusters
+  pdat <- atm@phenoData@data
+    # Type I injured 0-5
+    # type II uninjured 7 and 8
+    # type II TD III 6
+    # type II TD I 10
+    # type II proliferating 12
+    # type I 15
+  clusters_to_keep <- c("Naive Type I", 
+                        "Cell Cycle Arrest Type II",
+                        "Transdifferentiating Type II",
+                        "Injured Type II", 
+                        "Proliferating Type II")
+  valid_cells <- pdat %>% 
+      tibble::rownames_to_column("cell_id") %>% 
+      dplyr::filter(labeled_clusters %in% clusters_to_keep) %>% 
+      dplyr::pull(cell_id)
+    
+  atm <- atm[, valid_cells]
+    
+  atm <- estimateSizeFactors(atm)
+  atm <- estimateDispersions(atm)
+    
+    # select_genes
+  atm <- detectGenes(atm, min_expr = 0.1)
+    fData(atm)$use_for_ordering <- fData(atm)$num_cells_expressed > 0.05 * ncol(atm)
+    plot_pc_variance_explained(atm, return_all = F)
+    
+    # order_cells
+    
+  atm <- reduceDimension(atm,
+                           max_components = 2,
+                           norm_method = 'log',
+                           num_dim = 15,
+                           reduction_method = 'tSNE',
+                           verbose = T)
+    
+  atm <- clusterCells(atm, verbose = F, num_clusters = 5)
+  plot_cell_clusters(atm, color_by = 'as.factor(Cluster)')
+  plot_cell_clusters(atm, color_by = 'labeled_clusters')
+    
+    
+  plot_rho_delta(atm, rho_threshold = 2, delta_threshold = 4 )
+  atm_expressed_genes <-  row.names(subset(fData(atm),
+                                             num_cells_expressed >= 10))
+    
+  clustering_DEG_genes <- differentialGeneTest(atm[atm_expressed_genes,],
+              fullModelFormulaStr = '~Cluster',
+              cores = 4)
+    
+  atm_ordering_genes <- row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:1000]
+    
+  atm <- setOrderingFilter(atm,
+            ordering_genes = atm_ordering_genes)
+    
+  atm <- reduceDimension(atm, method = 'DDRTree')
+    
+  atm <- orderCells(atm)
+    
+  saveRDS(atm, "ptime/pt.rds")
+} else {
+  atm <- readRDS("ptime/pt.rds")
+}
+```
+
+### plot pseudotime {.tabset }
+
+#### Pseudotime
+```{r ps}
+
+p <- plot_cell_trajectory(atm, color_by = "Pseudotime") +
+    scale_colour_viridis(discrete = F)
+
+p
+save_plot(file.path("ptime", "pseudotime.pdf"), p, base_height = 4)
+```
+
+#### Cell Type
+```{r lc, fig.width = 10}
+p <- plot_cell_trajectory(atm, color_by = "labeled_clusters", 
+                           cell_size = 0.1) +
+    scale_colour_brewer(palette = "Set1", name = "") + 
+    guides(colour = guide_legend(override.aes = list(size = 5))) + 
+    theme(legend.position = "right")
+
+## reorder to have proliferating on top
+## column 4 was named NA for unknown reasons
+colnames(p$data)[4] <- "unknown"
+
+
+plt_order <- c("Cell Cycle Arrest Type II",
+                                       "Naive Type I",
+                                       "Injured Type II",
+                                       "Transdifferentiating Type II",
+                                       "Proliferating Type II")
+plt_dat <- p$data %>% 
+  mutate(labeled_clusters = factor(labeled_clusters,
+                                   levels = plt_order)) %>% 
+  left_join(data_frame(labeled_clusters = plt_order),
+            ., by = "labeled_clusters")
+ 
+set.seed(2)
+cols <- sample(brewer.pal(5, "Set1"), 5)
+p <- ggplot(plt_dat, aes(data_dim_1, data_dim_2)) + 
+  geom_point(aes(colour = labeled_clusters),
+             size  = 0.1) + 
+   scale_colour_manual(values = cols) + 
+    guides(colour = guide_legend(override.aes = list(size = 5))) + 
+    theme(legend.position = "right")
+
+save_plot(file.path("ptime", "pseudotime_celltype.pdf"), p, 
+          base_height = 4, base_aspect_ratio = 2)
+```
+
+#### pseudotime state
+```{r ps_state}
+p <- plot_cell_trajectory(atm, color_by = "State") +
+    scale_colour_viridis(discrete = T)
+
+p
+save_plot(file.path("ptime", "pseudotime_state.pdf"), p, base_height = 4)
+```
+
+#### Experiment
+```{r expt}
+p <- plot_cell_trajectory(atm, color_by = "expt") + 
+    scale_colour_viridis(discrete = T)
+
+p
+save_plot(file.path("ptime", "pseudotime_state.pdf"), p, base_height = 4)
+```
+
+#### Experiment individually
+```{r}
+p <- plot_cell_trajectory(atm, color_by = "State") +
+    facet_wrap(~sample_names, nrow = 5) +
+    scale_colour_viridis(discrete = T)
+
+p
+
+save_plot(file.path("ptime", "tree_per_sample.pdf"), p, base_height = 10)
+```
+
+### Plot expression by genes {.tabset }
+
+```{r cell_markers}
+control_markers <- c(
+  "Ager", # mouse homologue of RAGE
+  "Aqp5",
+  "Pdpn", # T1-Alpha
+  "Scgb1a1",
+  "Hopx",
+  "Id2")
+
+ae2 <- c(
+  "Sftpa1", #SPA
+  "Sftpc",
+  "Abca3",
+  "Muc1",
+  "Lyz2",
+  "Lamp3"
+  )
+
+g2_apop<- c(
+  "Trp53",
+  "Fas",
+  "Cd53",
+  "Top2a",
+  "Cdk1",
+  "Mki67"
+)
+
+transdiff <- c(
+  "Cav1",
+  "Cav2",
+  "Pdpn",
+  "Vegfa",
+  "Sfn",
+  "Epcam"
+)
+
+
+```
+
+#### trandiff markers
+
+```{r tds}
+plot_markers <- function(obj, marker){
+  plot_cell_trajectory(obj, 
+                     markers = marker, 
+                     use_color_gradient = T, 
+                     option = "C", 
+                     cell_size =  0.75) +
+    theme(
+      legend.position = "none"
+    )
+}
+
+plts <- map(transdiff, ~plot_markers(atm, .x))
+
+plot_grid(plotlist = plts)
+```      
+
+#### Cell cycle arrest and G2/m
+
+```{r genes_in_pseudo}
+plts <- map(g2_apop, ~plot_markers(atm, .x))
+
+plot_grid(plotlist = plts)
+```      
+
+#### Type II markers
+
+```{r }
+plts <- map(ae2, ~plot_markers(atm, .x))
+
+plot_grid(plotlist = plts)
+```      
+
+#### Other markers
+
+```{r}
+plts <- map(control_markers, ~plot_markers(atm, .x))
+plot_grid(plotlist = plts)
+```  
+
+### Project onto TSNE
+
+```{r}
+ptime <- data.frame(cells = rownames(atm@phenoData@data),
+                    Pseudotime = atm@phenoData@data$Pseudotime,
+                    Pseudotime_state = atm@phenoData@data$State)
+ptime <- left_join(data_frame(cells = rownames(atcells@meta.data)),
+                   ptime, by = "cells")
+
+ptime[is.na(ptime)] <- -1    
+ptime <- as.data.frame(ptime)
+rownames(ptime) <- ptime[, 1]
+ptime[, 1] <- NULL
+
+atcells <- AddMetaData(atcells, ptime)
+
+FeaturePlot(atcells, "Pseudotime")
+
+atcells <- SetAllIdent(atcells, "Pseudotime_state")
+TSNEPlot(atcells, 
+         colors.use = viridis::viridis(length(unique(atcells@ident))))
+```
+
+
+
+### BEAM
+```{r branchpoint_analysis, fig.width= 8, fig.height= 16}
+atm <- readRDS("ptime/pt.rds")
+
+if (!file.exists("ptime/beam.rds")) {
+  BEAM_inj <- BEAM(atm, branch_point = 1, cores = 4)
+  BEAM_inj <- BEAM_inj[order(BEAM_inj$qval),]
+  BEAM_inj <- BEAM_inj[,c("gene_short_name", "pval", "qval")]
+} else {
+  BEAM_inj <- readRDS("ptime/beam.rds")
+}
+```
+
+
+```{r heatmap, fig.width= 8, fig.height= 16}
+
+pdf("ptime/injured_lung.pdf", width = 8, height = 36)
+plot_genes_branched_heatmap(atm[row.names(BEAM_inj[1:300, ]),],
+                                          branch_point = 1,
+                                          num_clusters = 4,
+                                          use_gene_short_name = TRUE,
+                                          show_rownames = TRUE)
+dev.off()
+
+saveRDS(BEAM_inj, "beam.rds")
+```
+
+## bp markers in pseudotime
+
+```{r, fig.width = 8, fig.height = 8}
+progression_genes <- list(
+  AT2_late = c(
+    "Lcn2",
+    "Il33",
+    "Hc",
+    "Trf",
+    "Lyz2",
+    "S100g",
+    "Lyz1"),
+  AT2_early = c(
+    "Fabp5",
+    "Lamp3",
+    "Cd36",
+    "Scd1",
+    "Sftpb",
+    "Slc34a2",
+    "Abca3",
+    "Sftpa1",
+    "Egfl6",
+    "Soat1",
+    "Bex2",
+    "Muc1",
+    "Sftpc"
+  ),
+  AT1_early = c(
+    "Aqp5",
+    "Pdpn",
+    "Rtkn2",
+    "Ager",
+    "Emp2",
+    "Cav1",
+    "Clic5",
+    "Lmo7",
+    "S100a6",
+    "Col4a3",
+    "Akap5",
+    "Cryab"
+  ),
+  AT1_late = c(
+    "Sdpr",
+    "S100a14"
+  )
+)
+
+nature_markers <- list(
+  ATII = c(
+    "S100g",
+    "Slc34a2",
+    "Lamp3",
+    "Bex2",
+    "Cd36",
+    "Etv5",
+    "Scd1",
+    "Il33",
+    "Fabp5",
+    "Hc",
+    "Sftpa1",
+#    "Dlk1",
+    "Cxcl15",
+    "Chsy1",
+    "Lcn2",
+    "Fasn",
+    "Sftpb",
+    "Egfl6",
+    "Lyz1",
+    "Sftpc",
+    "Soat1",
+    "Glrx",
+    "Mlc1",
+    "Retnla",
+    "Mid1ip1",
+    "Chil1",
+    "Rab27a",
+    "Fabp12",
+    "Lgi3",
+    "Lyz2"),
+  ATI = c(
+    "Clic5",
+    "Pdpn",
+    "Akap5",
+    "Lmo7",
+    "Ahnak",
+    "Sdpr",
+    "Emp2",
+    "Col4a3",
+    "Rtkn2",
+    "Cav1",
+    "Timp3",
+    "Ager",
+    "Msn",
+    "Limch1",
+    "Hopx",
+    "Ptrf",
+    "S100a6",
+    "Dpysl2",
+    "Agrn",
+    "Akap2",
+    "Pmp22",
+    "Tinagl1",
+    "Lgals3",
+    "S100a14",
+    "Malat1",
+    "Vegfa",
+    "Samhd1",
+    "Qk",
+    "Sema3a",
+    "Aqp5")
+  )
+
+progression_genes <- unname(unlist(progression_genes))
+nature_markers <- unname(unlist(nature_markers))
+genes_to_plot <- unique(c(nature_markers, progression_genes))
+pdata <- pData(atm) 
+cells_to_plot <- rownames(pdata[pdata$labeled_clusters %in% c("Naive Type I",
+                                                     "Transdifferentiating Type II"), ])
+expr <- atcells@data[genes_to_plot, cells_to_plot]
+
+cell_order_td_type1 <- pdata %>% 
+  tibble::rownames_to_column("cell") %>% 
+  filter(cell %in% cells_to_plot) %>% 
+  arrange(Pseudotime) %>% 
+  pull("cell")
+
+
+expr <- as.matrix(expr)
+expr_td_type1 <- t(scale(t(expr)))
+
+mdata <- atcells@meta.data[cells_to_plot, "labeled_clusters", drop = F]
+
+cell_samples <- unique(mdata$labeled_clusters)
+cols <- brewer.pal(length(cell_samples), "Paired")[1:length(cell_samples)]
+names(cols) <- cell_samples
+
+ha_td_type1 <- HeatmapAnnotation(mdata,
+                        col = list(labeled_clusters = cols),
+                        annotation_legend_param = list(labeled_clusters = list(
+                          title = "Cell Type\nThis Study")))
+
+
+cells_to_plot <- rownames(pdata[pdata$labeled_clusters %in% c("Naive Type I",
+                                                     "Transdifferentiating Type II",
+                                                     "Cell Cycle Arrest Type II"), ])
+expr <- atcells@data[genes_to_plot, cells_to_plot]
+
+cell_order_td_type1_cca <- pdata %>% 
+  tibble::rownames_to_column("cell") %>% 
+  filter(cell %in% cells_to_plot) %>% 
+  arrange(Pseudotime) %>% 
+  pull("cell")
+
+
+expr <- as.matrix(expr)
+expr_td_type1_cca <- t(scale(t(expr)))
+
+mdata <- atcells@meta.data[cells_to_plot, "labeled_clusters", drop = F]
+
+cell_samples <- unique(mdata$labeled_clusters)
+cols <- brewer.pal(length(cell_samples), "Paired")[1:length(cell_samples)]
+names(cols) <- cell_samples
+
+ha_td_type1_cca <- HeatmapAnnotation(mdata,
+                        col = list(labeled_clusters = cols),
+                        annotation_legend_param = list(labeled_clusters = list(
+                          title = "Cell Type\nThis Study")))
+
+
+cells_to_plot <- rownames(pdata[pdata$labeled_clusters %in% c("Naive Type I",
+                                                     "Transdifferentiating Type II",
+                                                     "Cell Cycle Arrest Type II",
+                                                     "Proliferating Type II"), ])
+expr <- atcells@data[genes_to_plot, cells_to_plot]
+
+cell_order_td_type1_cca_prolif  <- pdata %>% 
+  tibble::rownames_to_column("cell") %>% 
+  filter(cell %in% cells_to_plot) %>% 
+  arrange(Pseudotime) %>% 
+  pull("cell")
+
+
+expr <- as.matrix(expr)
+expr_td_type1_cca_prolif <- t(scale(t(expr)))
+
+mdata <- atcells@meta.data[cells_to_plot, "labeled_clusters", drop = F]
+
+cell_samples <- unique(mdata$labeled_clusters)
+cols <- brewer.pal(length(cell_samples), "Paired")[1:length(cell_samples)]
+names(cols) <- cell_samples
+
+ha_td_type1_cca_prolif <- HeatmapAnnotation(mdata,
+                        col = list(labeled_clusters = cols),
+                        annotation_legend_param = list(labeled_clusters = list(
+                          title = "Cell Type\nThis Study")))
+
+```
+
+```{r}
+
+bp_dat <- file.path("extdata", "nature13173-s4.txt")
+if (!file.exists(bp_dat)) {  download.file("https://media.nature.com/original/nature-assets/nature/journal/v509/n7500/extref/nature13173-s4.txt", 
+                                           bp_dat)
+}
+
+bp_dat <- read_tsv(bp_dat)
+
+## exclude control cells, and non AT1 or AT2 cell types
+
+bp_dat <- filter(bp_dat, putative_cell_type %in% c("BP", "AT1", "AT2"))
+bp_metadat <- select(bp_dat, cell_name:putative_cell_type)
+bp_mat <- select(bp_dat, -time_point, -sample, -putative_cell_type) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell_name") %>% 
+  as.matrix(.) %>% 
+  t(.)
+
+rownames(bp_mat)[rownames(bp_mat) == "Chi3l1"] <- "Chil1"
+bp_hmap <- bp_mat[genes_to_plot, ]
+
+bp_metadat <- bp_metadat %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell_name")
+
+bp_metadat <- bp_metadat[colnames(bp_hmap), "putative_cell_type", 
+                         drop = F]
+
+cell_samples <- unique(bp_metadat$putative_cell_type)
+
+cols <- brewer.pal(9, "Paired")[c(3,4,5)]
+names(cols) <- cell_samples
+
+reorder <- c("AT1", 
+  "BP",
+  "AT2")
+
+bp_metadat <- bp_metadat[order(match(bp_metadat$putative_cell_type, reorder)),
+                         , drop = F]
+
+ha_nature <- HeatmapAnnotation(bp_metadat,
+                        col = list(putative_cell_type = cols),
+                        annotation_legend_param = list(putative_cell_type = list(
+                          title = "Cell Type\nTreutlein B. et al\nNature 2014")))
+
+bp_hmap_nature <- t(scale(t(bp_hmap)))
+bp_hmap_nature <- bp_hmap_nature[, rownames(bp_metadat)]
+hm <- Heatmap(bp_hmap_nature, 
+              top_annotation = ha_nature,
+             # row_order = top_markers$gene,
+              column_order = rownames(bp_metadat),
+             cluster_columns = F,
+              cluster_rows = T,
+              show_row_names = T,
+              show_column_names = F)
+hm
+```
+
+```{r}
+pdf(file.path("misc", "hmap_bp_expression_td_type1.pdf"), width = 14, height = 9)
+hm_1 <- Heatmap(expr_td_type1, name = "Z-scores\nNormalized\nExpression",
+                column_title = "This study (cells ordered by pseudotime)",
+        top_annotation = ha_td_type1,
+        column_order = cell_order_td_type1,
+       # row_order = unlist(progression_genes),
+        cluster_rows = T,
+        cluster_columns = F,
+        show_row_names = T,
+       row_names_side = "left",
+        show_column_names = F, width = 1.5)
+
+hm <- Heatmap(bp_hmap_nature, 
+              column_title = "Treutlein B. et al Nature 2014 (cells ordered by cell type)",
+              top_annotation = ha_nature,
+              column_order = rownames(bp_metadat),
+             cluster_columns = F,
+              cluster_rows = T,
+              show_row_names = F,
+              show_column_names = F, show_heatmap_legend = F, width = 1)
+
+draw(hm_1 + hm, heatmap_legend_side = "left")
+dev.off()
+
+pdf(file.path("misc", "hmap_bp_expression_td_type1_cca.pdf"), width = 14, height = 9)
+hm_1 <- Heatmap(expr_td_type1_cca, name = "Z-scores\nNormalized\nExpression",
+                column_title = "This study (cells ordered by pseudotime)",
+        top_annotation = ha_td_type1_cca,
+        column_order = cell_order_td_type1_cca,
+       # row_order = unlist(progression_genes),
+        cluster_rows = T,
+        cluster_columns = F,
+        show_row_names = T,
+       row_names_side = "left",
+        show_column_names = F, width = 1.5)
+
+hm <- Heatmap(bp_hmap_nature, 
+              column_title = "Treutlein B. et al Nature 2014 (cells ordered by cell type)",
+              top_annotation = ha_nature,
+              column_order = rownames(bp_metadat),
+             cluster_columns = F,
+              cluster_rows = T,
+              show_row_names = F,
+              show_column_names = F, show_heatmap_legend = F, width = 1)
+
+draw(hm_1 + hm, heatmap_legend_side = "left")
+dev.off()
+
+pdf(file.path("misc", "hmap_bp_expression_td_type1_cca_prolif.pdf"), width = 14, height = 9)
+hm_1 <- Heatmap(expr_td_type1_cca_prolif, name = "Z-scores\nNormalized\nExpression",
+                column_title = "This study (cells ordered by pseudotime)",
+        top_annotation = ha_td_type1_cca_prolif,
+        column_order = cell_order_td_type1_cca_prolif,
+       # row_order = unlist(progression_genes),
+        cluster_rows = T,
+        cluster_columns = F,
+        show_row_names = T,
+       row_names_side = "left",
+        show_column_names = F, width = 1.5)
+
+hm <- Heatmap(bp_hmap_nature, 
+              column_title = "Treutlein B. et al Nature 2014 (cells ordered by cell type)",
+              top_annotation = ha_nature,
+              column_order = rownames(bp_metadat),
+             cluster_columns = F,
+              cluster_rows = T,
+              show_row_names = F,
+              show_column_names = F, show_heatmap_legend = F, width = 1)
+
+draw(hm_1 + hm, heatmap_legend_side = "left")
+dev.off()
+```
