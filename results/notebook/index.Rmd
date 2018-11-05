@@ -1,0 +1,18 @@
+---
+title: "Zemans Single Cell RNA-Seq analysis"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+---
+
+Scripts and analysis for single cell RNA-Seq of lung epithelia in an injury recovery model
+
+## Data processing pipeline
+
+[Snakemake Pipeline](../../../pipeline/Snakefile)
+
+## Data analyses
+
+[Cell filtering, embedding, and clustering](../../preprocess.html)   
+[Markers and Gene set enrichment](../../markers.html) 
+[Pseudotime](../../pseudotime.html)   
+[Figure Code](../../revision.html)

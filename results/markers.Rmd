@@ -21,7 +21,7 @@ knitr::opts_chunk$set(cache.lazy = FALSE)
 
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source("../../R/globals.R")
+source("../R/globals.R")
 data_dir <- file.path(data_dir, "updated")
 ```
 
@@ -31,7 +31,7 @@ data_dir <- file.path(data_dir, "updated")
   Examine marker genes that are enriched in interesting populations. 
   
 ```{r load_dat}
-atcells <- readRDS("s_obj2.rds")
+atcells <- readRDS(file.path("preprocess", "s_obj_final.rds"))
 mdata <- atcells@meta.data
 new_mdata <- tibble::rownames_to_column(mdata, "cell") %>% 
   dplyr::mutate(sample_type = ifelse(str_detect(new_expt_id, 
@@ -48,6 +48,28 @@ new_mdata <- tibble::rownames_to_column(mdata, "cell") %>%
   tibble::column_to_rownames("cell")
 
 atcells <- AddMetaData(atcells, new_mdata)
+
+cell_id_relabel <- c("Endothelial" = "Endothelial/Fibroblast",
+  "Basal" = "Basal",
+  "Club" = "Club",
+  "Ciliary" = "Ciliated",
+  "Naive Type I" = "Naive AEC1",
+  "Macrophages" = "Macrophage",
+  "Injured Type II" = "Other Injured AEC2",
+  "Proliferating Type II" = "Injured AEC2: Proliferating",
+  "Cell Cycle Arrest Type II" = "Injured AEC2: Cell Cycle Arrest",
+  "Transdifferentiating Type II" = "Injured AEC2: Transdifferentiating",
+  "Naive Type II" = "Naive AEC2")
+
+
+m_df <- data.frame(row.names = rownames(atcells@meta.data),
+                       pretty_cell_labels = cell_id_relabel[atcells@meta.data$labeled_clusters])
+
+m_df$pretty_cell_labels <- factor(m_df$pretty_cell_labels,
+                                  levels = cell_id_relabel)
+
+atcells <- AddMetaData(atcells, m_df)
+
 ```
 
 
@@ -63,7 +85,7 @@ TSNEPlot(atcells,
 
 
 ```{r ct_tsne, fig.width = 14, fig.height = 10, fig.cap= "TSNE plot with each cell colored by a defined cell type"}
-atcells <-SetAllIdent(atcells, "labeled_clusters")
+atcells <-SetAllIdent(atcells, "pretty_cell_labels")
 TSNEPlot(atcells,
          colors.use = brewer.pal(n = 12, "Paired"),
          do.return = T,
@@ -86,9 +108,10 @@ naive_atcells_markers <- FindAllMarkers(naive_atcells,
                                   min.pct = 0.25, 
                                   thresh.use = 0.25)
 
-dir.create("markers")
+outdir <- "markers"
+dir.create(outdir)
 
-write_tsv(naive_atcells_markers, file.path("markers", "naive_cell_types_markers_wilcox.txt"))
+write_tsv(naive_atcells_markers, file.path(outdir, "naive_cell_types_markers_wilcox.txt"))
 ```
 
 
@@ -551,186 +574,6 @@ save_plot(file.path(outdir, "canonical_markers.pdf"),
           base_height = 6)
 ```
 
-### td pops
-
-```{r td_markers}
-new_cell_markers <- list(
-  proliferation = c( 
-    "Mki67", 
-    "Pcna", 
-    "Top2a", 
-    "Tk1", 
-    "Pola1",
-     "Lamp3",
-    "Hc",
-    "Sftpc",
-    "Sftpb",
-    "Cxcl15"),
-  at1_markers = c(
-    "Pdpn",
-    "Emp2",
-    "Hopx",
-    "Rtkn2",
-    "Akap5",
-    "Aqp5",
-    "Igfbp2"
-  ), 
-#  at2_markers = c(
-#     "Sftpc", 
-#     "Sftpb",
-#     "Lamp3", 
-#     "Hc",
-#     "Cxcl15"
-#  ),
-  cell_cycle_arrest = c(
-     "Cdkn2b", 
-     "Trp53", 
-     "Cdk4", 
-     "Ccnd1"
-  )
-)
-
-```
-
-```{r dotplot_td_pops, fig.height = 6, fig.width = 6}
-atcells <- SetAllIdent(atcells, "labeled_clusters")
-
-all_cell_types <- unique(atcells@meta.data$labeled_clusters)
-td_cell_types <- all_cell_types[str_detect(all_cell_types, 
-                               "Proliferating|Transdifferentiating|Arrest|Naive\ Type\ I$")]
-td_cell_ids <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in% td_cell_types]
-td_atcells <- SubsetData(atcells, cells.use = td_cell_ids)
-
-
-cell_label_order <- c(    
-     "Proliferating Type II",
-    "Cell Cycle Arrest Type II",
-    "Transdifferentiating Type II",
-    "Naive Type I")
-
-genes <- unname(unlist(new_cell_markers))
-markers <- FetchData(td_atcells, vars.all = genes) %>%
-  as.data.frame(.) %>% 
-  tibble::rownames_to_column(., "cell") %>% 
-  left_join(td_atcells@meta.data %>% 
-              tibble::rownames_to_column("cell"), 
-            by = "cell") %>% 
-  dplyr::select(labeled_clusters, 2:(length(genes) + 1)) %>% 
-  gather(gene, expr, -labeled_clusters)  %>% 
-  group_by(labeled_clusters) %>% 
-  split(., .$labeled_clusters)
-
-new_cell_markers <- new_cell_markers[c("proliferation",
-                                      "cell_cycle_arrest",
-                                       "at1_markers",
-                                       "at1_markers")]
-
-ordered_markers <- markers[cell_label_order] %>% 
-  map2(., new_cell_markers, 
-       ~filter(.x, .x$gene %in% .y) %>% 
-         arrange(desc(expr)) %>% 
-         pull(gene) %>% 
-         unique()) 
-
-p <- DotPlot(td_atcells, 
-             genes.plot = factor(unique(unname(unlist(ordered_markers)))), 
-             plot.legend = T,
-             #cols.use = brewer.pal(11, "RdGy")[c(1:5, 7)][c(6, 1)] ,
-             cols.use = brewer.pal(9, "Blues")[c(1, 9)],
-             do.return = T,
-             x.lab.rot = T) +
-  coord_flip() + 
-  labs(colour = "Expression\n(log)",
-           size = "Percent of cells\nwith expression") +
-  scale_y_discrete(limits = cell_label_order)
-           
-p
-
-save_plot(file.path(outdir, "td_markers.pdf"), 
-          p, 
-          base_width = 6, 
-          base_height = 6)
-```
-
-### notch
-
-```{r notch}
-notch_markers <- list(
-   notch = c(
-    "Jag1",
-    "Sox9", 
-  	"Edn1", 
-  	"Efnb1", 
-  	"Efna1", 
-  	"Nes", 
-  	"Rnd1", 
-  	"Flt1", 
-  	"Snw1", 
-  	"Id2", 
-  	"Jun", 
-  	"Cx3cl1", 
-  	"Hes1", 
-  	"Sgpl1", 
-  	"Kalrn", 
-  	"Nampt", 
-  	"Crebbp", 
-  	"Runx1", 
-  	"Tec", 
-  	"Notch1",
-  	"Notch2",
-  	"Notch3",
-  	"Notch4", 
-  	"Dll1", 
-  	"Rbpj", 
-  	"Mib1", 
-  	"Myb",
-    "Ets1")
-)
-
-
-```
-
-```{r dotplot_notch_pops, fig.height = 6, fig.width = 6}
-atcells <- SetAllIdent(atcells, "labeled_clusters")
-
-all_cell_types <- unique(atcells@meta.data$labeled_clusters)
-tgf_cell_types <- all_cell_types[str_detect(all_cell_types, 
-                               "Proliferating|Transdifferentiating|Arrest|Naive\ Type\ I|Injured")]
-tgf_cell_ids <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in% tgf_cell_types]
-tgf_atcells <- SubsetData(atcells, cells.use = tgf_cell_ids)
-
-cell_label_order <-  c(
-      "Naive Type II",
-      "Injured Type II",
-      "Proliferating Type II",
-      "Transdifferentiating Type II",
-    "Cell Cycle Arrest Type II",
-    "Naive Type I"
-  )
-
-
-marker_dat <- FetchData(atcells, notch_markers$notch)
-marker_dat <- factor(unique(unlist(notch_markers)))[order(colMaxs(marker_dat),decreasing = T)]
-
-p <- DotPlot(tgf_atcells, 
-             genes.plot = marker_dat, 
-             plot.legend = T,
-             #cols.use = brewer.pal(11, "RdGy")[c(1:5, 7)][c(6, 1)] ,
-             cols.use = brewer.pal(9, "Blues")[c(1, 9)],
-             do.return = T,
-             x.lab.rot = T) +
-  coord_flip() + 
-  labs(colour = "Expression\n(log)",
-           size = "Percent of cells\nwith expression") +
-  scale_y_discrete(limits = cell_label_order)
-           
-p
-
-save_plot(file.path(outdir, "notch_markers.pdf"), 
-          p, 
-          base_width = 6, 
-          base_height = 6)
-```
 ### tgfbeta
 
 ```{r tgf}

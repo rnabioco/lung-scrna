@@ -1,0 +1,86 @@
+""" Snakefile to produce figures """
+import os
+RESULTS = ".."
+
+rule all:
+  input:
+    os.path.join("_site", "index.html")
+
+rule build_site:
+  """ render rmarkdown website
+  """
+  input:
+    rmd = "index.Rmd",
+    htmls = os.path.join(RESULTS, "pseudotime.html"),
+  output:
+    os.path.join("_site", "index.html")
+  log:
+    "logs/build_site.txt",
+  shell:
+    """
+    R -e "rmarkdown::render_site('{input.rmd}')"
+    """
+
+rule run_figs_markdown:
+  """
+  render figs Rmarkdown
+  """
+  input:
+   rmd =  os.path.join(RESULTS, "revision.Rmd"),
+   processing_rmd = os.path.join(RESULTS, "pseudotime.html")
+  output:
+    os.path.join(RESULTS, "revision.html")
+  log:
+    "logs/revision.txt",
+  shell:
+    """
+    R -e "rmarkdown::render('{input.rmd}')"
+    """
+
+rule run_pseudo_markdown:
+  """
+  render pseudotime Rmarkdown
+  """
+  input:
+   rmd =  os.path.join(RESULTS, "pseudotime.Rmd"),
+   processing_rmd = os.path.join(RESULTS, "markers.html")
+  output:
+    os.path.join(RESULTS, "pseudotime.html")
+  log:
+    "logs/pseudotime.txt",
+  shell:
+    """
+    R -e "rmarkdown::render('{input.rmd}')"
+    """
+
+rule run_marker_markdown:
+  """
+  render marker Rmarkdown
+  """
+  input:
+   rmd =  os.path.join(RESULTS, "markers.Rmd"),
+   processing_rmd = os.path.join(RESULTS, "preprocess.html")
+  output:
+    os.path.join(RESULTS, "markers.html")
+  log:
+    "logs/markers.txt",
+  shell:
+    """
+    R -e "rmarkdown::render('{input.rmd}')"
+    """
+
+rule run_processing_markdown:
+  """
+  render long running Rmarkdown
+  """
+  input:
+    rmd = os.path.join(RESULTS, "preprocess.Rmd"),
+  output:
+    os.path.join(RESULTS, "preprocess.html")
+  log:
+    "logs/process.txt",
+  shell:
+    """
+    R -e "rmarkdown::render('{input.rmd}')"
+    """
+

@@ -20,7 +20,7 @@ knitr::opts_chunk$set(warning = FALSE)
 
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source("../../R/globals.R")
+source("../R/globals.R")
 data_dir <- file.path(data_dir, "updated")
 ```
 
@@ -152,29 +152,31 @@ atcells <- RunTSNE(atcells,
                    seed.use = 20180501, 
                    perplexity = 30)
 
-dir.create("misc")
+outdir <- "preprocess"
+dir.create(file.path(outdir, "misc"), recursive = T, showWarnings = F)
+
 plt <- TSNEPlot(atcells, 
          colors.use = brewer.pal(n = 10, "Paired"), 
          group.by = "sample_names", pt.size = 0.5)
 
-save_plot(file.path("misc", "by_sample_tsne.pdf"), plt, base_width = 6)
+save_plot(file.path(outdir, "misc", "by_sample_tsne.pdf"), plt, base_width = 6)
 
 plt <- TSNEPlot(atcells, 
          colors.use = brewer.pal(n = 10, "Paired"), 
          group.by = "expt", pt.size = 0.5)
-save_plot(file.path("misc", "by_expt_tsne.pdf"), plt, base_width = 6)
+save_plot(file.path(outdir, "misc", "by_expt_tsne.pdf"), plt, base_width = 6)
 
 plts <- FeaturePlot(atcells,
             c("Top2a", "Hopx", "Sfn", "Ager", "Cav1", "Cav2"), do.return = T)
-pdf(file.path("misc", "markers.pdf"))
+pdf(file.path(outdir, "misc", "markers.pdf"))
 plts
 dev.off()
 
 plt <- DotPlot(atcells, genes.plot = c("Top2a", "Hopx", "Sfn", "Ager", "Cav1", "Cav2"), group.by = "orig.ident", do.return = T)
-save_plot(file.path("misc", "dotplot_example.pdf"), plt)
+save_plot(file.path(outdir, "misc", "dotplot_example.pdf"), plt)
 
 mito <- FeaturePlot(atcells, "proportion.mito", do.return = T)
-save_plot(file.path("misc", "mito.pdf"), mito[[1]])
+save_plot(file.path(outdir, "misc", "mito.pdf"), mito[[1]])
 ```
   
   
@@ -221,7 +223,7 @@ p <- map2(p, c(names(cell_ids)[c(7:10, 1)], "All expt1", names(cell_ids)[c(4:6, 
 plt <- plot_grid(plotlist = p, nrow = 2, 
                  align = "hv", rel_widths = c(rep(1, 5), 1.75))
 
-save_plot(file.path("misc", "tsne_per_sample.pdf"), plt, 
+save_plot(file.path(outdir, "misc", "tsne_per_sample.pdf"), plt, 
           base_width = 24, base_height = 9)
 ```
 
@@ -239,7 +241,42 @@ atcells <- FindClusters(atcells,
                      random.seed = 20180403)
 
 plt <- TSNEPlot(atcells, pt.size = 0.5, do.label = T)
-save_plot(file.path("misc", "clustering.pdf"), plt, base_width = 10, base_height = 8)
+save_plot(file.path(outdir, "misc", "clustering.pdf"), plt, base_width = 10, base_height = 8)
+
+atcells <- SetAllIdent(atcells, "res.1.6")
+
+params <- seq(0.3, 1.9, 0.3)
+for (i in seq_along(params)){
+   atcells <- FindClusters(atcells, 
+                     reduction.type = "pca", 
+                     dims.use = 1:15,
+                     k.param = 30, 
+                     resolution = params[i], 
+                     print.output = 0, 
+                     plot.SNN = F,
+                     save.SNN = T, 
+                     random.seed = 0)
+}
+
+clustering_params <- colnames(atcells@meta.data) %>% 
+  str_subset("res")
+
+# generate tsnes for each clustering setting
+clust_tsnes <- map(clustering_params,
+     function(x){
+       atcells <- SetAllIdent(atcells, x); 
+       TSNEPlot(atcells, 
+                pt.size = 0.5,
+                do.label = T,
+                label.size = 10,
+                do.return = T,
+                no.legend = T, 
+                plot.title = x)
+     })
+
+
+plt <- plot_grid(plotlist = clust_tsnes)
+save_plot(file.path(outdir, "clustering_params.pdf"), plt, nrow = 3, ncol = 3)
 
 ```
 
@@ -299,7 +336,6 @@ transdiff <- c(
 ```{r, fig.width=8, fig.height=8}
 FeaturePlot(atcells, control_markers, pt.size = .25)
 
-
 ### ATII markers
 
 FeaturePlot(atcells, ae2, pt.size = .25)
@@ -322,7 +358,7 @@ FeaturePlot(atcells, g2_macro, pt.size = .5)
 plts <- FeaturePlot(atcells, transdiff, pt.size = .5, 
                     cols.use = rev(brewer.pal(11, "RdGy")[c(1:5, 7)]), do.return = T)
 plt <- plot_grid(plotlist = plts, nrow = 3)
-save_plot(file.path("misc", "td_populations.pdf"), plt, base_width = 10, base_height = 8)
+save_plot(file.path(outdir, "misc", "td_populations.pdf"), plt, base_width = 10, base_height = 8)
 ```
 
 
@@ -332,13 +368,13 @@ plt <- TSNEPlot(atcells,
          colors.use = brewer.pal(n = 8, "Set1"), 
          group.by = "expt",
          pt.size = 0.1)
-save_plot(file.path("misc", "all_samples.pdf"), plt, base_width = 10, base_height = 8)
+save_plot(file.path(outdir, "misc", "all_samples.pdf"), plt, base_width = 10, base_height = 8)
 
-saveRDS(atcells, "s_obj.rds")
+#saveRDS(atcells, file.path(outdir, "s_obj.rds"))
 ```
 
 ```{r readin}
-atcells <- readRDS("s_obj.rds")
+#atcells <- readRDS(file.path(outdir, "s_obj.rds"))
 norm_metadata <- atcells@meta.data
 atcells_dr <- atcells@dr
 snn <- atcells@snn
@@ -484,13 +520,14 @@ plot_grid(a, b, ncol = 1)
 Overall the numbers of UMIs and genes detected are good and in the expected range for single cell data. 
 
 ```{r write_matrix}
-dir.create("count_matrix", showWarnings = FALSE)
+dir.create(file.path(outdir, "count_matrix"), showWarnings = FALSE)
 
 write.table(as.matrix(atcells@data), 
-            file.path("count_matrix", "count_matrix.tsv"),
+            file.path(outdir, "count_matrix", "count_matrix.tsv"),
             quote = F, sep = "\t")
 
-gzip(file.path("count_matrix", 
+gzip(file.path(outdir, 
+               "count_matrix", 
                "count_matrix.tsv"),
      overwrite = TRUE,
      remove = TRUE)
@@ -624,7 +661,7 @@ dat <- dplyr::mutate(dat,
 out_dat <- left_join(unfiltered,
                         dat,
                         by = c("cell" = "cells"))
-write_tsv(out_dat, "per_cell_stats.txt")
+write_tsv(out_dat, file.path(outdir, "per_cell_stats.txt"))
 
 # only keep filtered cells
 dat <- dat %>% dplyr::filter(cells %in% atcells@cell.names)
@@ -927,11 +964,12 @@ plt <- ggplot(cluster_summary, aes(cluster, cells, fill = cluster)) +
     axis.text.x = element_blank()
   )
   
-save_plot(file.path("misc", "cells_per_cluster.pdf"), plt, base_width = 16)
+save_plot(file.path(outdir, "misc", "cells_per_cluster.pdf"), plt, base_width = 16)
 ```
 
 ```{r save}
-saveRDS(atcells, file = "s_obj3.rds")
+saveRDS(atcells, file.path(outdir, "s_obj_final.rds"))
+
 mdata_geo <- atcells@meta.data %>% 
   tibble::rownames_to_column("cell") %>% 
   select(cell:orig.ident, expt, new_expt_id, labeled_clusters)
@@ -942,8 +980,8 @@ colnames(mdata_geo) <- c("cell",
                          "experiment_number",
                          "sample_name",
                          "cell_type_name")
-write_tsv(mdata_geo, "cell_metadata.tsv")
-R.utils::gzip("cell_metadata.tsv", overwrite = T)
+write_tsv(mdata_geo, file.path(outdir, "cell_metadata.tsv"))
+R.utils::gzip(file.path(outdir, "cell_metadata.tsv"), overwrite = T)
 ```
 
 ## Session Info
