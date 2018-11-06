@@ -519,20 +519,6 @@ plot_grid(a, b, ncol = 1)
 
 Overall the numbers of UMIs and genes detected are good and in the expected range for single cell data. 
 
-```{r write_matrix}
-dir.create(file.path(outdir, "count_matrix"), showWarnings = FALSE)
-
-write.table(as.matrix(atcells@data), 
-            file.path(outdir, "count_matrix", "count_matrix.tsv"),
-            quote = F, sep = "\t")
-
-gzip(file.path(outdir, 
-               "count_matrix", 
-               "count_matrix.tsv"),
-     overwrite = TRUE,
-     remove = TRUE)
-```
-
 ```{r utility_fxn}
 cell_counts <- function(seurat_object){
   #returns tbl_df with number of cells per sample type in seurat object

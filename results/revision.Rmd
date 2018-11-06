@@ -605,12 +605,12 @@ injured_cell_types_to_keep <- c(
 
 mdata <- atcells@meta.data
 
-filter_idx <- (mdata$sample_type == "Naive Non-AT-II Epithelial") &
+filter_idx <- (mdata$sample_type == "Naive Non-AEC2 Epithelial") &
   (mdata$labeled_clusters %in% "Naive Type I")
 naive_non_atii_epi <- rownames(mdata)[filter_idx]
-naive_atii <- rownames(mdata)[mdata$sample_type == "Naive AT-II" &
+naive_atii <- rownames(mdata)[mdata$sample_type == "Naive AEC2" &
                                   mdata$labeled_clusters %in% cell_types_to_keep]
-injured_atii <- rownames(mdata)[mdata$sample_type =="Injured AT-II" &
+injured_atii <- rownames(mdata)[mdata$sample_type =="Injured AEC2" &
                                   mdata$labeled_clusters %in% injured_cell_types_to_keep]
 
 naive_injured_cell_types <- list(
@@ -637,7 +637,7 @@ dir.create(other_dir, recursive = T, showWarnings = F)
 
 ```{r}
 write_lines("tsne_no_labels.pdf\ttSNE of all cells", 
-            file.path(outdir, "README.txt"),
+            file.path(f1_outdir, "README.txt"),
             append = T)
 
 plt <- plot_tsne(atcells, 
@@ -658,7 +658,7 @@ write_lines(c("tsne_naive_nonepi.pdff\ttSNE of all naive cells"),
 plt <- plot_feature(atcells, feature = "sample_type",
           .cols = brewer.pal(3, "Set1")[c(3,2)],
           pt_alpha = 1,
-          cell_filter = naive_cell_types$all_naive) +
+          cell_filter = naive_cell_types$`All Naive`) +
   guides(color = guide_legend(nrow = 2,
                               override.aes = list(size = 2))) + 
   theme(legend.position = "bottom")
@@ -1044,11 +1044,12 @@ gene_order <- left_join(data_frame(cluster = c("Naive Type II",
                         top_n_markers, 
                         by = "cluster") %>% pull(gene)
 
-mat <- mat[, c("Naive Type I", "Naive Type II", "Basal", "Ciliary", "Club")]
-colnames(mat) <- c("ATI", "ATII", "Basal", "Ciliated", "Club")
+mat <- mat[, c("Naive AEC1", "Naive AEC2", "Basal", "Ciliated", "Club")]
+#colnames(mat) <- c("ATI", "ATII", "Basal", "Ciliated", "Club")
 mat <- t(scale(t(mat)))
 
-pdf(file.path(f1_outdir, "naive_top_markers_viridiscols.pdf"), width = 14, height = 4)
+pdf(file.path(f1_outdir, "naive_top_markers_viridiscols.pdf"), 
+    width = 14, height = 4)
 Heatmap(t(mat), col = viridis(9),
         name = "Expression\n(Z-score)",
         cluster_rows = F,
@@ -1061,219 +1062,6 @@ dev.off()
 write_lines("heatmaps of top marker genes from naive type i or naive type 2 (top 20)\nExpression is shown as z-scores (i.e. subtract each gene expression value by the mean in each column, and divide by the standard deviation per column). Cells were grouped in the same manner as the differential expression performed for markers_per_naive_cell_type.xlsx",
             file.path(f1_outdir, "README.txt"), append = T) 
 ```
-
-```{r hmaps_td_pops}
-
-markers <- read_tsv(file.path("markers",
-                          "td_markers_wilcox.txt"))
-
-top_n_markers_td <- markers %>% 
-  group_by(cluster) %>% 
-  arrange(p_val_adj, .by_group = T) %>% 
-   slice(1:50)
- 
-atcells <- SetAllIdent(atcells, "labeled_clusters") 
-mat <- AverageExpression(atcells, 
-                         genes.use = unique(top_n_markers_td$gene))
-
-td_cell_types <- c(
-  "Proliferating Type II",
-  "Cell Cycle Arrest Type II",
-  "Transdifferentiating Type II")
-
-gene_order <- left_join(data_frame(cluster = td_cell_types),
-                        top_n_markers_td) %>% pull(gene)
-
-mat <- mat[, td_cell_types]
-mat <- t(scale(t(mat)))
-
-
-pdf(file.path(outdir, "td_top_markers_viridiscols.pdf"), width = 24, height = 4)
-Heatmap(t(mat), col = viridis(9),
-        name = "Expression\n(Z-score)",
-        cluster_rows = F,
-        cluster_columns = F,
-        column_order = gene_order,
-        show_row_dend = F,
-        show_column_dend = F,
-        show_column_names = T,
-        row_names_gp = gpar(fontsize = 10))   
-dev.off()
-
-pdf(file.path(outdir, "td_top_markers_viridiscols_rotated.pdf"), 
-    width = 6, height = 16)
-Heatmap(mat, col = viridis(9),
-        name = "Expression\n(Z-score)",
-        cluster_rows = F,
-        cluster_columns = F,
-        row_order = gene_order,
-        show_row_dend = F,
-        show_column_dend = F,
-        show_column_names = T,
-        row_names_gp = gpar(fontsize = 8))   
-dev.off()
-
-##### Top 30 markers
-top_n_markers_td <- markers %>% 
-  group_by(cluster) %>% 
-  arrange(p_val_adj, .by_group = T) %>% 
-   slice(1:30)
- 
-atcells <- SetAllIdent(atcells, "labeled_clusters") 
-mat <- AverageExpression(atcells, 
-                         genes.use = unique(top_n_markers_td$gene))
-
-td_cell_types <- c(
-  "Proliferating Type II",
-  "Cell Cycle Arrest Type II",
-  "Transdifferentiating Type II")
-
-gene_order <- left_join(data_frame(cluster = td_cell_types),
-                        top_n_markers_td) %>% pull(gene)
-
-mat <- mat[, td_cell_types]
-mat <- t(scale(t(mat)))
-
-pdf(file.path(outdir, "td_top_markers_viridiscols_top30.pdf"), 
-    width = 16, height = 4)
-Heatmap(t(mat), col = viridis(9),
-        name = "Expression\n(Z-score)",
-        cluster_rows = F,
-        cluster_columns = F,
-        column_order = gene_order,
-        show_row_dend = F,
-        show_column_dend = F,
-        show_column_names = T,
-        row_names_gp = gpar(fontsize = 10))   
-dev.off()
-
-pdf(file.path(outdir, "td_top_markers_viridiscols_rotated_top30.pdf"), 
-    width = 4, height = 12)
-Heatmap(mat, col = viridis(9),
-        name = "Expression\n(Z-score)",
-        cluster_rows = F,
-        cluster_columns = F,
-        row_order = gene_order,
-        show_row_dend = F,
-        show_column_dend = F,
-        show_column_names = T,
-        row_names_gp = gpar(fontsize = 8))   
-dev.off()
-
-write_lines("Also included TD populations heatmap with top 50 or 30 markers",
-            file.path("fig2", "heatmaps", "README.txt"), append = T) 
-```
-
-
-```{r hmaps_td_pops_plus_injured}
-
-markers <- read_tsv(file.path("markers",
-                          "td_injured_markers_wilcox.txt"))
-
-top_n_markers_td <- markers %>% 
-  group_by(cluster) %>% 
-  arrange(p_val_adj, .by_group = T) %>% 
-   slice(1:50)
-
-atcells <- SetAllIdent(atcells, "labeled_clusters") 
-mat <- AverageExpression(atcells, 
-                         genes.use = unique(top_n_markers_td$gene))
-
-td_cell_types <- c(
-  "Proliferating Type II",
-  "Cell Cycle Arrest Type II",
-  "Transdifferentiating Type II",
-  "Injured Type II")
-
-gene_order <- left_join(data_frame(cluster = td_cell_types),
-                        top_n_markers_td) %>% pull(gene)
-
-mat <- mat[, td_cell_types]
-mat <- t(scale(t(mat)))
-
-
-pdf(file.path(outdir, "td_injured_top_50markers_viridiscols.pdf"), width = 28, height = 6)
-Heatmap(t(mat), col = viridis(9),
-        name = "Expression\n(Z-score)",
-        cluster_rows = F,
-        cluster_columns = F,
-        column_order = gene_order,
-        show_row_dend = F,
-        show_column_dend = F,
-        show_column_names = T,
-        row_names_gp = gpar(fontsize = 8))   
-dev.off()
-
-
-top_n_markers_td30 <- markers %>% 
-  group_by(cluster) %>% 
-  arrange(p_val_adj, .by_group = T) %>% 
-   slice(1:30)
-
-atcells <- SetAllIdent(atcells, "labeled_clusters") 
-mat <- AverageExpression(atcells, 
-                         genes.use = unique(top_n_markers_td30$gene))
-
-td_cell_types <- c(
-  "Proliferating Type II",
-  "Cell Cycle Arrest Type II",
-  "Transdifferentiating Type II",
-  "Injured Type II")
-
-gene_order <- left_join(data_frame(cluster = td_cell_types),
-                        top_n_markers_td30) %>% pull(gene)
-
-mat <- mat[, td_cell_types]
-mat <- t(scale(t(mat)))
-
-pdf(file.path(outdir, "td_injured_top_30markers_viridiscols.pdf"), width = 24, height = 6)
-Heatmap(t(mat), col = viridis(9),
-        name = "Expression\n(Z-score)",
-        cluster_rows = F,
-        cluster_columns = F,
-        column_order = gene_order,
-        show_row_dend = F,
-        show_column_dend = F,
-        show_column_names = T,
-        row_names_gp = gpar(fontsize = 12))   
-dev.off()
-
-write_lines("Also included TD populations with injured heatmap with top 30 markers",
-            file.path("fig2", "heatmaps", "README.txt"), append = T) 
-```
-
-
-```{r check_on_at2stem}
-atstems <- atcells@meta.data %>% 
-  tibble::rownames_to_column("cell") %>% 
-  mutate(atstem_classes = ifelse(str_detect(new_expt_id,
-                                            "^ATII expt.") & 
-                                   labeled_clusters == "Proliferating Type II",
-         "at2_naive_prolif",
-         ifelse(str_detect(new_expt_id,
-                           "^ATII-injured") & 
-                                   labeled_clusters == "Proliferating Type II",
-         "at2_injured_prolif",
-         NA))) %>% 
-  as.data.frame() %>% 
-  tibble::column_to_rownames("cell")
-
-atstem_cells <- SubsetData(atcells, cells.use = rownames(na.omit(atstems)))
-atstem_cells <- AddMetaData(atstem_cells, atstems[, "atstem_classes", drop = F])
-atstem_cells <- SetAllIdent(atstem_cells, "atstem_classes")
-
-atstem_markers <- FindMarkers(atstem_cells, 
-                              ident.1 = "at2_naive_prolif", 
-                              ident.2 = "at2_injured_prolif") %>% 
-  tibble::rownames_to_column("gene")
-write_tsv(atstem_markers, file.path("markers", "atstem_markers.txt"))
-openxlsx::write.xlsx(atstem_markers, 
-                     file.path("markers",
-                               "atstem_markers.xlsx"))
-
-```
-
-
 
 
 ## Figure 2
@@ -1493,53 +1281,6 @@ write_lines(c("tsnes are colored to show each technical replicate",
 
 ```
 
-
-
-```{r per_cell_type}
-non_type2 <- rownames(atcells@meta.data)[str_detect(atcells@meta.data$new_expt_id, 
-                                                    "^Non-ATII epithelial")]
-type2 <- rownames(atcells@meta.data)[str_detect(atcells@meta.data$new_expt_id, 
-                                                "^ATII expt")]
-
-paired_tsne_theme  <- theme(axis.title.x = element_blank(),
-        axis.text = element_text(size = 10),
-        axis.title = element_text(size = 10))
-
-
-cell_markers <- c(
-  ciliary_markers,
-  club_markers,
-  endos_markers, 
-  fibs_markers, 
-  eos_markers, 
-  macs_markers, 
-  at2_markers, 
-  at1_markers, 
-  basal_markers,
-  dend_markers,
-  ly6_markers
-)
-
-dir.create(file.path("fig2", "misc", "tsne_markers_by_cell_type"), 
-           recursive = T,
-           showWarnings = FALSE)
-
-map(cell_markers, function(x){
-  out_path <- file.path("fig2", 
-                        "misc",
-                       "tsne_markers_by_cell_type",
-                       x)
-  dir.create(out_path,
-             recursive = T,
-             showWarnings = FALSE)
-  
-  plot_grouped_features(atcells,
-                      gene_to_plot = x,
-                      out_dir = out_path)})
-
-```
-
-
 ### side-by-side tSNEs
 ```{r gene_sets}
 new_cell_markers <- list(
@@ -1575,6 +1316,7 @@ new_cell_markers <- list(
 )
 
 ```
+
 
 ```{r by_sample_type}
 dir.create(file.path(f2_outdir, "tsne_naive_injured_by_sample_type"))
@@ -1985,6 +1727,7 @@ walk2(plts, genes,
 
 ### Show AEC1 cells derived from injured AEC2
 
+
 ```{r}
 library(ggrepel)
 typeII <- rownames(atcells@meta.data)[atcells@meta.data$pretty_cell_labels == "Naive AEC1"]
@@ -2001,7 +1744,7 @@ p <- plot_feature(atcells, "sample_type",
                   ylim = c(-29.5, -26)) +
     theme(legend.position = "top")
 
-subset_ae2_injured <- filter(plt1$data, sample_type == "Injured AT-II")
+subset_ae2_injured <- filter(p$data, sample_type == "Injured AEC2")
 
 p <- p + geom_text_repel(
   data = subset_ae2_injured,
@@ -2025,6 +1768,33 @@ save_plot(file.path(new_outdir, "injured_aec2_cells_in_naive_aec2_cluster.pdf"),
           base_aspect_ratio = 0.8)
 ```
 
+
+
+### Distribution of cells per cell type
+
+```{r cluster_distribution, fig.width = 16, fig.height = 10}
+cluster_ids <- atcells@meta.data$pretty_cell_labels
+cell_ids <- rownames(atcells@meta.data)
+samples <- atcells@meta.data$sample_type
+
+cluster_summary <- data_frame(id = cell_ids, 
+                              cluster = cluster_ids,
+                              samples)
+cluster_summary <- group_by(cluster_summary, samples, cluster) %>% 
+  summarize(cells = n())
+
+plt <- ggplot(cluster_summary, aes(cluster, cells, fill = cluster)) +
+  facet_wrap(~samples, scales = "free_y",nrow = 3) +
+  ylab("Number of Cells") +
+  scale_fill_brewer(palette = "Paired") +
+  geom_bar(stat = "identity") +
+  theme(
+    axis.text.x = element_blank()
+  )
+  
+save_plot(file.path(new_outdir, "cells_per_cluster.pdf"), 
+          plt, nrow = 3, ncol = 1, base_aspect_ratio = 3)
+```
 
 ## Other Supplement
 
@@ -2376,7 +2146,7 @@ og_plt <- DotPlot(sub_atcells,
   labs(colour = "Z-score\nAverage\nExpression",
        size = "Percent of cells\nwith expression")
 
-save_plot(file.path("misc", "dotplot_development.pdf"), 
+save_plot(file.path(f3_outdir, "dotplot_development.pdf"), 
           og_plt,
           base_height = 8,
           base_aspect_ratio = 0.6)
@@ -2482,22 +2252,44 @@ save_plot(file.path(f3_outdir,"dotplot_development_both.pdf"),
 ```
 
 
+## GEO processed data
 
+```{r write_out_UMI_table}
+dir.create(file.path(main_outdir, "geo"), showWarnings = FALSE)
 
+out_matrix <- as.matrix(atcells@raw.data[, atcells@cell.names])
+write.table(out_matrix,
+  file.path(main_outdir, "geo", "count_matrix.tsv"),
+  quote = F,
+  sep = "\t"
+)
 
-### GEO processed data
+R.utils::gzip(file.path(main_outdir,
+            "geo",
+            "count_matrix.tsv"),
+  overwrite = TRUE,
+  remove = TRUE
+)
 
-```{r write_out_expression, eval = F}
+## metadata
 
-if (!file.exists("count_matrix/expr_matrix.tsv.gz")) {
-  mat <- as.data.frame(as.matrix(atcells@data))
-  mat <- tibble::rownames_to_column(mat, "gene")
-  write_tsv(mat, "count_matrix/expr_matrix.tsv") 
-  R.utils::gzip("count_matrix/expr_matrix.tsv", 
-                overwrite = T)
-  rm(mat)
-}
+mdata_out <- tibble::rownames_to_column(atcells@meta.data, "cell") %>% 
+  dplyr::select(cell:nUMI, 
+                expt,
+                sample_type,
+                experiment,
+                gfp = gfp_counts, 
+                cluster = res.1.6,
+                cell_type = pretty_cell_labels
+                )
+write_tsv(mdata_out, file.path(main_outdir, "geo", "cell_metadata.tsv"))
+
+R.utils::gzip(file.path(main_outdir, "geo", "cell_metadata.tsv"), 
+              overwrite = TRUE,
+              remove = TRUE)
+        
 ```
+
 
 
 ## Session Info
