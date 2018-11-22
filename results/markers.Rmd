@@ -98,7 +98,7 @@ TSNEPlot(atcells,
 
 ### All clusters
 
-```{r id_tsne, fig.width = 14, fig.height = 10, fig.cap= "TSNE plot with each cell colored by the cluster id"}
+```{r id_tsne1, fig.width = 14, fig.height = 10, fig.cap= "TSNE plot with each cell colored by the cluster id"}
 atcells <- SetAllIdent(atcells, "res.1.6")
 
 all_cluster_markers <- FindAllMarkers(atcells, 
@@ -121,13 +121,16 @@ inj_clusters <- c("0",
                   "4",
                   "5",
                   "6",
+                  "7",
+                  "9",
                   "13",
                   "14")
+
 inj_cells <- rownames(atcells@meta.data)[atcells@meta.data$res.1.6 %in%
                                            inj_clusters]
 
 tmp_dat <- SubsetData(atcells, cells.use = inj_cells)
-
+tmp_dat <- SetAllIdent(tmp_dat, "res.1.6")
 inj_cluster_markers <- FindAllMarkers(tmp_dat, 
                                   only.pos = TRUE,  
                                   min.pct = 0.25, 
@@ -138,6 +141,19 @@ write_tsv(inj_cluster_markers,
             "injured_cluster_markers_wilcox.txt"))
 rm(tmp_dat)
 gc()
+```
+
+### All labeled cell types
+
+```{r}
+all_cell_type_markers <- FindAllMarkers(SetAllIdent(atcells, "pretty_cell_labels"),
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+write_tsv(all_cell_type_markers,
+          file.path(outdir,
+            "all_labled_cell_markers_wilcox.txt"))
 ```
 ### Naive
 ```{r find_markers_naive_cells}
@@ -279,6 +295,87 @@ write_tsv(td_markers, file.path(outdir, "td_markers_wilcox.txt"))
 
 
 ## Marker Tables
+
+```{r all_clusters}
+markers <- read_tsv(file.path(outdir, "all_cluster_markers_wilcox.txt"))
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_cluster.xlsx"))
+
+```
+```{r all_injured_clusters}
+markers <- read_tsv(file.path(outdir, "injured_cluster_markers_wilcox.txt"))
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each injured AEC2 cluster and all other injured AEC2 cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_injured_cluster.xlsx"))
+
+```
 
 ```{r naivemarkers}
 markers <- read_tsv(file.path("markers",

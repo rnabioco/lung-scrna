@@ -97,7 +97,7 @@ atcells <- AddMetaData(atcells, m_df)
 
 ### Process unfiltered data
  
-  Loading and filtering code largely reproduced from [filtering RMarkdown](../2017-04-27/preprocess.Rmd). From now on the replicate cell samples (i.e. ATI1expt1 and ATI2expt1) will be presented as 1 sample (AT1expt1).
+  Loading and filtering code largely reproduced from [filtering RMarkdown](../preprocess.Rmd). From now on the replicate cell samples (i.e. ATI1expt1 and ATI2expt1) will be presented as 1 sample (AT1expt1).
 
 
 ```{r qc_summaries}
@@ -1086,7 +1086,7 @@ atcells <- SetAllIdent(atcells, "res.1.6")
 
 plt <- plot_feature(atcells, feature = "res.1.6", 
                  label_text = T, 
-                 label_color = "Black", label_size = 2,
+                 label_color = "Black", label_size = 6,
                  .cols = many_cols) 
 
 save_plot(file.path(f2_outdir, "tsne_cluster_ids.pdf"), 
@@ -1524,7 +1524,7 @@ td_cell_types <- c(
 gene_order <- left_join(data_frame(cluster = td_cell_types),
                         top_n_markers_td30) %>% pull(gene)
 
-mat <- mat[, c(td_cell_types, "Injured Type II")]
+mat <- mat[, c(td_cell_types, c("Injured Type II", "Naive Type II"))]
 mat <- t(scale(t(mat)))
 
 pdf(file.path(f4_outdir, "td_injured_top_30markers_viridiscols.pdf"), width = 24, height = 6)
@@ -1766,7 +1766,23 @@ p <- p + geom_text_repel(
 save_plot(file.path(new_outdir, "injured_aec2_cells_in_naive_aec2_cluster.pdf"),
           p, 
           base_aspect_ratio = 0.8)
+
+
+p <- plot_feature(atcells, "gfp_counts", 
+                  cell_filter = typeII,
+                  pt_alpha = 1,
+                  pt_size = 1,
+                  legend_title = "GFP"
+) +
+    coord_cartesian(xlim = c(-38, -34.5),
+                    ylim = c(-29.5, -26)) 
+
+save_plot(file.path(new_outdir, "injured_aec2_cells_in_naive_aec2_cluster_gfp.pdf"),
+          p, 
+          base_aspect_ratio = 1.1)
+
 ```
+
 
 
 
@@ -1780,13 +1796,18 @@ samples <- atcells@meta.data$sample_type
 cluster_summary <- data_frame(id = cell_ids, 
                               cluster = cluster_ids,
                               samples)
-cluster_summary <- group_by(cluster_summary, samples, cluster) %>% 
-  summarize(cells = n())
+cluster_summary <- group_by(cluster_summary,
+                            samples, cluster) %>% 
+  summarize(cells = n()) %>% 
+  group_by(samples) %>% 
+  mutate(total_n = sum(cells),
+         percent_cells = 100 * (cells / total_n)) %>% 
+  select(-total_n)
 
 plt <- ggplot(cluster_summary, aes(cluster, cells, fill = cluster)) +
   facet_wrap(~samples, scales = "free_y",nrow = 3) +
   ylab("Number of Cells") +
-  scale_fill_brewer(palette = "Paired") +
+  scale_fill_brewer(palette = "Paired", name = "") +
   geom_bar(stat = "identity") +
   theme(
     axis.text.x = element_blank()
@@ -1794,6 +1815,285 @@ plt <- ggplot(cluster_summary, aes(cluster, cells, fill = cluster)) +
   
 save_plot(file.path(new_outdir, "cells_per_cluster.pdf"), 
           plt, nrow = 3, ncol = 1, base_aspect_ratio = 3)
+
+write_tsv(cluster_summary,
+          file.path(new_outdir, "cells_per_cluster_counts.txt"))
+
+
+
+cluster_ids <- atcells@meta.data$res.1.6
+cell_ids <- rownames(atcells@meta.data)
+
+cluster_summary <- data_frame(id = cell_ids, 
+                              cluster = cluster_ids)
+cluster_summary <- group_by(cluster_summary, cluster) %>% 
+  summarize(cells = n()) %>% 
+  mutate(total_n = sum(cells),
+         percent_cells = 100 * (cells / total_n)) %>% 
+  select(-total_n)
+
+write_tsv(cluster_summary,
+          file.path(new_outdir, "cells_per_all_clusters_counts.txt"))
+```
+
+
+### Show heatmap from all clusters
+
+```{r}
+markers_dir <- file.path("markers")
+all_cluster_markers <- read_tsv(file.path(markers_dir,
+                                          "all_cluster_markers_wilcox.txt"))
+# show injured group together
+inj_cluster_order <- c(
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  9,
+  13,
+  14)
+
+all_cluster_order <- c(inj_cluster_order,
+  setdiff(unique(all_cluster_markers$cluster), 
+                             inj_cluster_order))
+
+
+top_genes <- filter(all_cluster_markers, !str_detect(gene, "^mt-")) %>% 
+  mutate(cluster = factor(cluster, levels = all_cluster_order)) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = T) %>% 
+  slice(1:20) 
+
+
+```
+
+```{r}
+# downsample each cluster to at most 100 cells, otherwise heatmap is uninterpretable
+# to avoid error sample with replacement, then uniquify later
+set.seed(42)
+cell_ids <- tibble::rownames_to_column(atcells@meta.data, "cell") %>% 
+  group_by(res.1.6) %>% 
+  sample_n(100, replace = T) %>% 
+  pull(cell) %>% 
+  unique()
+
+pdf(file.path(new_outdir, "heatmap_all_clusters.pdf"), 
+    width = 10, height = 8)
+
+atcells_heatmap <- SubsetData(atcells, cells.use = cell_ids)
+atcells_heatmap <- SetAllIdent(atcells_heatmap, "res.1.6")
+atcells_heatmap <- ScaleData(atcells_heatmap)
+
+DoHeatmap(atcells_heatmap, 
+          genes.use = top_genes$gene, 
+          draw.line = T, 
+          group.order = all_cluster_order,
+          col.low = viridis(3)[1],
+          col.mid = viridis(3)[2],
+          col.high = viridis(3)[3],
+          slim.col.label = T, 
+          cex.row = 2, 
+          group.cex =  6, 
+          remove.key = T)
+
+dev.off()
+```
+
+### Show heatmap from all labeled cell clusters
+
+```{r}
+markers_dir <- file.path("markers")
+all_cluster_markers <- read_tsv(file.path(markers_dir,
+                                          "all_labled_cell_markers_wilcox.txt"))
+
+atcells <- SetAllIdent(atcells, "pretty_cell_labels")
+
+# exclude mitochondrial genes 
+top_genes <- filter(all_cluster_markers, !str_detect(gene, "^mt-")) %>%    
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = T) %>% 
+  slice(1:20)
+
+set.seed(42)
+cell_ids <- tibble::rownames_to_column(atcells@meta.data, "cell") %>% 
+  group_by(pretty_cell_labels) %>% 
+  sample_n(100, replace = T) %>% 
+  pull(cell) %>% 
+  unique()
+
+pdf(file.path(new_outdir, "heatmap_all_labeled_clusters.pdf"), 
+    width = 10, height = 10)
+
+atcells_heatmap <- SubsetData(atcells, cells.use = cell_ids)
+atcells_heatmap <- ScaleData(atcells_heatmap)
+
+DoHeatmap(SetAllIdent(atcells_heatmap, "pretty_cell_labels"), 
+          genes.use = top_genes$gene, 
+          draw.line = T, 
+          col.low = viridis(3)[1],
+          col.mid = viridis(3)[2],
+          col.high = viridis(3)[3],
+          slim.col.label = T, 
+          cex.row = 3, 
+          group.cex = 6, 
+          remove.key = T,
+          group.label.rot = T)
+
+dev.off()
+```
+
+### Show heatmap from all naive cell types
+
+
+```{r}
+markers_dir <- file.path("markers")
+all_cluster_markers <- read_tsv(file.path(markers_dir,
+                                          "naive_cell_types_markers_wilcox.txt"))
+
+atcells <- SetAllIdent(atcells, "labeled_clusters")
+
+all_cell_types <- unique(atcells@meta.data$labeled_clusters)
+naive_cell_types <- all_cell_types[!str_detect(all_cell_types, 
+                               "Proliferating|Injured|Transdifferentiating|Arrest")]
+naive_cell_ids <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in% naive_cell_types]
+naive_atcells <- SubsetData(atcells, cells.use = naive_cell_ids)
+
+top_genes <- arrange(all_cluster_markers, cluster) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = T) %>% 
+  slice(1:20)
+# 
+# mat <- AverageExpression(SetAllIdent(naive_atcells, "pretty_cell_labels"), 
+#                          genes.use = unique(top_genes$gene), 
+#                          use.scale = F)
+# 
+# mat <- scale(log1p(mat))
+# #mat <- sweep(mat, 2, apply(mat, 2, max), "/")
+# 
+# mdata <- tibble::rownames_to_column(naive_atcells@meta.data, "cell") %>% 
+#   arrange(pretty_cell_labels)
+# 
+# pdf(file.path(new_outdir, "heatmap_all_naive_clusters.pdf"), 
+#     width = 5, 
+#     height = 10)
+# 
+# genes_to_highlight <- c("Trp63",
+#                         "Agr3",
+#                         "Pigr",
+#                         "Col1a1",
+#                         "Fcer1g",
+#                         "Hopx",
+#                         "Lamp3")
+#                         
+# gene_idx <- which(rownames(mat) %in% genes_to_highlight)
+# 
+# 
+# hm <- Heatmap(mat, 
+#         col = viridis(9),
+#         name = "Expression\n(Z-score)",
+#         cluster_rows = F,
+#         cluster_columns = F,
+#         show_row_dend = F,
+#         show_column_dend = F,
+#         show_column_names = T,
+#         show_row_names = F) +
+#   rowAnnotation(link = row_anno_link(at = gene_idx, 
+#                                    labels = genes_to_highlight))
+#         
+# draw(hm, heatmap_legend_side = "left",
+#      padding = unit(c(2, 2, 2, 20), "mm"))
+# dev.off()
+
+
+naive_atcells <- ScaleData(naive_atcells)
+pdf(file.path(new_outdir, "heatmap_all_naive_clusters.pdf"), 
+    width = 10, height = 7)
+
+DoHeatmap(SetAllIdent(naive_atcells, "pretty_cell_labels"), 
+          genes.use = top_genes$gene, 
+          draw.line = T, 
+          col.low = viridis(3)[1],
+          col.mid = viridis(3)[2],
+          col.high = viridis(3)[3],
+          slim.col.label = T, 
+          cex.row = 3, 
+          group.cex = 6, 
+          remove.key = T,
+          group.label.rot = T)
+
+dev.off()
+```
+
+
+
+### Show dendogram with endo/fibro markers
+
+```{r}
+library(readxl)
+
+dir.create(file.path("docs", "extdata"), recursive = T)
+
+download.file("https://www.biorxiv.org/highwire/filestream/91273/field_highwire_adjunct_files/0/296608-1.xlsx", file.path("docs", "extdata", "lung_markers.xlsx"))
+
+
+sup1 <- read_excel(file.path("docs", "extdata", "lung_markers.xlsx"),
+                   col_types = c(rep('text', 8))
+                    )
+sup1 <- mutate_at(sup1, .vars = 2:6, as.numeric)
+
+# do not use
+# at2, at1, club cells, ciliated, include all others
+naive_clusters_to_not_use <- c(
+  "AT2 cells",
+  "AT1 cells",
+  "Club cells",
+  "Ciliated cells"
+)
+
+all_non_naive_markers <- filter(sup1, 
+                                !cluster %in% naive_clusters_to_not_use) %>% 
+  pull(gene) %>% 
+  unique()
+
+fibo_endo_markers <- filter(sup1,
+                            cluster %in% c("Endothelial (alveolar capillaries)",
+                                                 "Endothelial cells",
+                                                 "Fibroblasts")) %>% 
+  pull(gene) %>% 
+  unique()
+
+atcells <- BuildClusterTree(SetAllIdent(atcells,
+                                        "pretty_cell_labels"), 
+                            genes.use = fibo_endo_markers)
+
+pdf(file.path(new_outdir, "dendogram_fibroblasts.pdf"))
+   ape::plot.phylo(x = atcells@cluster.tree[[1]], 
+                   direction = "downwards")
+dev.off()
+
+
+atcells <- BuildClusterTree(SetAllIdent(atcells,
+                                        "pretty_cell_labels"), 
+                            genes.use = all_non_naive_markers)
+
+pdf(file.path(new_outdir, "dendogram_all_non_naive_types.pdf"))
+   ape::plot.phylo(x = atcells@cluster.tree[[1]], 
+                   direction = "downwards")
+dev.off()
+
+write_lines(c(
+  "dendogram_fibroblasts.pdf\tHierchical clustering of average expression profiles for each cluster using marker genes defined for\n
+Endothelial (alveolar capillaries), Endothelial cells and Fibroblasts\n
+markers were taken from this publication  https://doi.org/10.1101/296608",
+  "dendogram_all_non_naive_types.pdf\tHierchical clustering of average expression profiles for each cluster using marker genes defined for\n
+All cell types except Club, Ciliated, AEC1, and AEC2 cell types\n
+markers were taken from this publication  https://doi.org/10.1101/296608"
+),
+file.path(new_outdir, "README.txt"), append = T)
 ```
 
 ## Other Supplement
