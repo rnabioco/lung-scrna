@@ -146,6 +146,7 @@ gc()
 ### All labeled cell types
 
 ```{r}
+
 all_cell_type_markers <- FindAllMarkers(SetAllIdent(atcells, "pretty_cell_labels"),
                                   only.pos = TRUE,  
                                   min.pct = 0.25, 
@@ -155,6 +156,34 @@ write_tsv(all_cell_type_markers,
           file.path(outdir,
             "all_labled_cell_markers_wilcox.txt"))
 ```
+
+### Naive I/II and td pops
+
+```{r}
+
+query_cell_types <- c(
+  "Proliferating Type II",
+  "Cell Cycle Arrest Type II",
+  "Transdifferentiating Type II",
+  "Injured Type II",
+  "Naive Type I",
+  "Naive Type II")
+
+query_cell_ids <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in% query_cell_types]
+
+atcells_subset <- SubsetData(atcells, cells.use = query_cell_ids)
+
+query_cell_type_markers <- FindAllMarkers(SetAllIdent(atcells_subset, "pretty_cell_labels"),
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+write_tsv(query_cell_type_markers,
+          file.path(outdir,
+            "td_pops_and_naive_markers_wilcox.txt"))
+```
+
+
 ### Naive
 ```{r find_markers_naive_cells}
 atcells <- SetAllIdent(atcells, "labeled_clusters")
@@ -336,6 +365,91 @@ openxlsx::write.xlsx(c(readme_sheet,
                                "markers_per_cluster.xlsx"))
 
 ```
+
+
+```{r all_clusters_labeled}
+markers <- read_tsv(file.path(outdir, "all_labled_cell_markers_wilcox.txt"))
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells.",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+names(list_of_markers) <- str_replace(names(list_of_markers), ":", "")  %>% str_replace("/", "_")
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_labeled_cluster.xlsx"))
+
+```
+
+```{r selected_clusters_labeled}
+markers <- read_tsv(file.path(outdir, "td_pops_and_naive_markers_wilcox.txt"))
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+names(list_of_markers) <- str_replace(names(list_of_markers), ":", " ")
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                            "markers_per_td_pops_and_naive_clusters.xlsx"))
+
+```
+
+
 ```{r all_injured_clusters}
 markers <- read_tsv(file.path(outdir, "injured_cluster_markers_wilcox.txt"))
 list_of_markers <- split(markers, markers$cluster)

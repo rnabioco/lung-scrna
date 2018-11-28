@@ -1524,11 +1524,11 @@ td_cell_types <- c(
 gene_order <- left_join(data_frame(cluster = td_cell_types),
                         top_n_markers_td30) %>% pull(gene)
 
-mat <- mat[, c(td_cell_types, c("Injured Type II", "Naive Type II"))]
-mat <- t(scale(t(mat)))
+hmat <- mat[, c(td_cell_types, c("Injured Type II", "Naive Type II"))]
+hmat <- t(scale(t(hmat)))
 
 pdf(file.path(f4_outdir, "td_injured_top_30markers_viridiscols.pdf"), width = 24, height = 6)
-Heatmap(t(mat), col = viridis(9),
+Heatmap(t(hmat), col = viridis(9),
         name = "Expression\n(Z-score)",
         cluster_rows = F,
         cluster_columns = F,
@@ -1541,6 +1541,56 @@ dev.off()
 
 write_lines("Also included TD populations with injured heatmap with top 30 markers",
             file.path(f4_outdir, "README.txt"), append = T) 
+
+
+
+
+markers <- read_tsv(file.path("markers",
+                          "td_pops_and_naive_markers_wilcox.txt"))
+top_n_markers <- markers %>% 
+  filter(!str_detect(gene, "^mt-")) %>% 
+  filter(!str_detect(gene, "^Rpl")) %>% 
+  filter(!str_detect(gene, "^Rps")) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = T) %>% 
+   slice(1:30)
+
+atcells <- SetAllIdent(atcells, "pretty_cell_labels") 
+mat <- AverageExpression(atcells, 
+                         genes.use = unique(top_n_markers$gene))
+
+alv_cell_types <- c(
+  "Naive AEC2",
+  "Other Injured AEC2",
+  "Injured AEC2: Proliferating",
+  "Injured AEC2: Cell Cycle Arrest",
+  "Injured AEC2: Transdifferentiating",
+  "Naive AEC1")
+
+gene_order <- left_join(data_frame(cluster = alv_cell_types),
+                        top_n_markers) %>% 
+  pull(gene)
+
+hmat <- mat[, alv_cell_types]
+hmat <- t(scale(t(hmat)))
+
+pdf(file.path(f4_outdir, "td_naive_top_30markers_viridiscols.pdf"), width = 30, height = 5)
+Heatmap(t(hmat), 
+        col = viridis(9),
+        name = "Expression\n(Z-score)",
+        cluster_rows = F,
+        cluster_columns = F,
+        column_order = gene_order,
+        show_row_dend = F,
+        show_column_dend = F,
+        show_column_names = T,
+        row_names_gp = gpar(fontsize = 12))  
+
+dev.off()
+
+write_lines("Also included TD populations with naive aec1 and aec2 heatmap with top 30 markers",
+            file.path(f4_outdir, "README.txt"), append = T)
+
 ```
 
 ## Figure 5
