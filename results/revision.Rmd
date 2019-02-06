@@ -600,13 +600,16 @@ injured_cell_types_to_keep <- c(
   "Injured Type II",
   "Proliferating Type II",
   "Transdifferentiating Type II",
-  "Cell Cycle Arrest Type II"
+  "Cell Cycle Arrest Type II",
+  "Naive Type II",
+  "Naive Type I"
 )
 
 mdata <- atcells@meta.data
 
 filter_idx <- (mdata$sample_type == "Naive Non-AEC2 Epithelial") &
-  (mdata$labeled_clusters %in% "Naive Type I")
+   (mdata$labeled_clusters %in% "Naive Type I")
+
 naive_non_atii_epi <- rownames(mdata)[filter_idx]
 naive_atii <- rownames(mdata)[mdata$sample_type == "Naive AEC2" &
                                   mdata$labeled_clusters %in% cell_types_to_keep]
@@ -1390,6 +1393,28 @@ map2(new_cell_markers,
           base_aspect_ratio = 4)
 })
 
+## just injured for cca
+
+other_cca <- c(
+ "Cdkn2b",
+ "Trp53",
+ "Cdk4",
+ "Ccnd1",
+ "Cdk6"
+)
+plts <- map(other_cca ,
+    ~plot_feature(atcells, feature = .x, 
+                  cell_filter = naive_injured_cell_types$`Injured AT-II Derived`))
+
+plt <- plot_grid(plotlist = plts, ncol = 1, nrow = 5)
+
+save_plot(file.path(f2_outdir, "tsne_naive_injured_by_sample_type",
+                    "no_labels",        "tsne_cell_cycle_arrest_injured_only.pdf"), 
+          plt,
+          ncol = 1,
+          nrow = 5,
+          base_height = 3.75, 
+          base_aspect_ratio = 1.33)
 ```
 
 
@@ -1487,6 +1512,8 @@ save_plot(file.path(f2_outdir, "dotplot_cca_proliferation_markers.pdf"),
 f3_outdir <- file.path(main_outdir, "main", "fig3")
 dir.create(f3_outdir, showWarnings = F)
 
+rownames(atcells@meta.data)[atcells@meta.data$pretty_cell_labels == "Naive AEC1"]
+
 plt <- plot_feature(atcells, 
                     feature = "Igfbp2",
                     cell_filter = naive_injured_cell_types$Combined,
@@ -1494,6 +1521,18 @@ plt <- plot_feature(atcells,
         theme_cowplot(font_size = 22)
 
 save_plot(file.path(f3_outdir, "igfbp2_tsne.pdf"), plt,  base_aspect_ratio = 1.33)
+
+plot_feature(atcells, "Igfbp2", 
+             cell_filter = naive_injured_cell_types$Combined,
+             pt_alpha = 1,
+             pt_size = 1
+) +
+    coord_cartesian(xlim = c(-38, -34.5),
+                    ylim = c(-29.5, -26)) +
+    theme(legend.position = "top")
+save_plot(file.path(f3_outdir, "igfbp
+                    2_tsne_smaller_dots.pdf"), plt,  base_aspect_ratio = 1.33)
+
 ```
 
 ## Figure 4
@@ -1541,10 +1580,51 @@ dev.off()
 
 write_lines("Also included TD populations with injured heatmap with top 30 markers",
             file.path(f4_outdir, "README.txt"), append = T) 
+```
+
+```{r}
+markers <- read_tsv(file.path("markers",
+                          "td_injured_markers_wilcox.txt"))
+
+top_n_markers_td30 <- markers %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = T) %>% 
+   slice(1:30)
+
+atcells <- SetAllIdent(atcells, "labeled_clusters") 
+mat <- AverageExpression(atcells, 
+                         genes.use = unique(top_n_markers_td30$gene))
+
+td_cell_types <- c(
+  "Proliferating Type II",
+  "Cell Cycle Arrest Type II",
+  "Transdifferentiating Type II")
+
+gene_order <- left_join(data_frame(cluster = td_cell_types),
+                        top_n_markers_td30) %>% pull(gene)
+
+hmat <- mat[, c(td_cell_types, c( "Naive Type I",  "Naive Type II", "Injured Type II"))]
+hmat <- t(scale(t(hmat)))
+
+pdf(file.path(f4_outdir, "td_injured_plus_naive_top_30markers_viridiscols.pdf"), width = 24, height = 6)
+Heatmap(t(hmat), col = viridis(9),
+        name = "Expression\n(Z-score)",
+        cluster_rows = F,
+        cluster_columns = F,
+        column_order = gene_order,
+        show_row_dend = F,
+        show_column_dend = F,
+        show_column_names = T,
+        row_names_gp = gpar(fontsize = 12))   
+dev.off()
+
+write_lines("Also included TD populations with the navive and injured heatmap with top 30 markers",
+            file.path(f4_outdir, "README.txt"), append = T) 
 
 
+```
 
-
+```{r}
 markers <- read_tsv(file.path("markers",
                           "td_pops_and_naive_markers_wilcox.txt"))
 top_n_markers <- markers %>% 
@@ -1593,6 +1673,53 @@ write_lines("Also included TD populations with naive aec1 and aec2 heatmap with 
 
 ```
 
+```{r}
+markers <- read_tsv(file.path("markers",
+                          "td_pops_and_naive_markers_wilcox.txt"))
+top_n_markers <- markers %>% 
+  filter(!str_detect(gene, "^mt-")) %>% 
+  filter(!str_detect(gene, "^Rpl")) %>% 
+  filter(!str_detect(gene, "^Rps")) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = T) %>% 
+   slice(1:30)
+
+atcells <- SetAllIdent(atcells, "pretty_cell_labels") 
+mat <- AverageExpression(atcells, 
+                         genes.use = unique(top_n_markers$gene))
+
+alv_cell_types <- c(
+  "Naive AEC2",
+  "Other Injured AEC2",
+  "Injured AEC2: Proliferating",
+  "Injured AEC2: Cell Cycle Arrest",
+  "Injured AEC2: Transdifferentiating")
+
+gene_order <- left_join(data_frame(cluster = alv_cell_types),
+                        top_n_markers) %>% 
+  pull(gene)
+
+hmat <- mat[, alv_cell_types]
+hmat <- t(scale(t(hmat)))
+
+pdf(file.path(f4_outdir, "td_naive_aec2_only_top_30markers_viridiscols.pdf"), width = 30, height = 5)
+Heatmap(t(hmat), 
+        col = viridis(9),
+        name = "Expression\n(Z-score)",
+        cluster_rows = F,
+        cluster_columns = F,
+        column_order = gene_order,
+        show_row_dend = F,
+        show_column_dend = F,
+        show_column_names = T,
+        row_names_gp = gpar(fontsize = 12))  
+
+dev.off()
+
+write_lines("Also included TD populations with naive aec2 heatmap with top 30 markers",
+            file.path(f4_outdir, "README.txt"), append = T)
+
+```
 ## Figure 5
 
 ```{r}
@@ -2208,6 +2335,29 @@ tsne_plts <- map2(cc_phase_markers,
 ```
 
   
+```{r percent_igfbp2}
+
+igf_dat <- FetchData(atcells, "Igfbp2") %>%
+  as.data.frame() %>% 
+  tibble::rownames_to_column("cell") 
+
+mdata <- atcells@meta.data %>% 
+  tibble::rownames_to_column("cell") 
+
+igf_dat <- left_join(igf_dat, mdata, by = "cell")
+
+igf_dat %>% 
+  mutate(expressed = Igfbp2 > 0) %>% 
+  group_by(pretty_cell_labels) %>%
+  summarize(n = n(), n_expr = sum(expressed)) %>%
+  mutate(percent_expr = 100 * n_expr / n) %>% 
+  rename(cell_type = pretty_cell_labels, 
+         n_cells_per_cluster = n, 
+         n_igfbp2_pos_cells = n_expr,
+         percent_igfbp2_pos_cells = percent_expr) %>% 
+  openxlsx::write.xlsx("markers/percent_igfbp2_pos.xlsx")
+```
+
 ## Compare AT1 and AT2 profiles to "bipotent" progenitors
 
 
@@ -2502,7 +2652,7 @@ save_plot(file.path(f3_outdir, "dotplot_development.pdf"),
           base_aspect_ratio = 0.6)
 ```
 
-```{r dotplot_nature}
+```{r dotplot_nature, eval = F}
 ## dl data from GEO
 outdir <- file.path("extdata", "GSE52583")
 ex_file <- file.path(outdir, 
@@ -2591,7 +2741,7 @@ save_plot(file.path("misc", "dotplot_development_naturedata.pdf"),
 ```
 
 
-```{r plot_both}
+```{r plot_both, eval = F}
 plt <- plot_grid(og_plt, nature_plt, align = "hv")
 save_plot(file.path(f3_outdir,"dotplot_development_both.pdf"), 
           plt,

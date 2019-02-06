@@ -745,6 +745,8 @@ openxlsx::write.xlsx(c(readme_sheet,
  
  To identify potential important regulators of transdifferentiation, transcription factors will be identified that are enriched in each cell type. A database of known TFs was queried (taken from this [paper](https://academic.oup.com/bioinformatics/article/29/19/2519/190534/TFcheckpoint-a-curated-compendium-of-specific-DNA) in bioinformatics) to select TFs. Shown below are the TFs found in each cluster ranked by enrichment in the cluster compared to all other clusters. 
  
+ Tfs were selected by being called TFS by either the TF checkpoint database of the DBD database (columns DbTF == "yes" or DBD == "DBD")
+ 
 ```{r, results = 'hide', message = F, eval = T}
 # https://academic.oup.com/bioinformatics/article/29/19/2519/190534/TFcheckpoint-a-curated-compendium-of-specific-DNA
 library(org.Mm.eg.db)
@@ -766,7 +768,8 @@ eid_to_symbol[["ENTREZID"]] <- as.integer(eid_to_symbol[["ENTREZID"]])
 # filter non-mouse tfs, and add in symbol
 annotated_tfs <- left_join(tfs, tbl_df(eid_to_symbol), 
           by = c("entrez_mouse" = "ENTREZID")) %>% 
-  dplyr::filter(entrez_mouse != 0)  #0 is na 
+  dplyr::filter(entrez_mouse != 0,  #0 is na 
+                DBD == "DBD" | DbTF == "yes")  #remove annotations like BMP4
 
 # select td markers
 markers <- read_tsv(file.path("markers", 
@@ -828,7 +831,7 @@ readme_sheet <- list(README = readme_sheet)
 names(readme_sheet) <- "README"
 # each element of named lists will become a seperate sheet
 openxlsx::write.xlsx(c(readme_sheet, per_cluster), 
-                     file.path("markers",                                  "transcription_factors_per_td_injured_clusters.xlsx"))
+                     file.path("markers",                                  "transcription_factors_per_td_injured_clusters_01252019.xlsx"))
 ```
 
 #### TFs enriched in `r clusters[1]`
@@ -916,7 +919,7 @@ readme_sheet <- list(README = readme_sheet)
 names(readme_sheet) <- "README"
 # each element of named lists will become a seperate sheet
 openxlsx::write.xlsx(c(readme_sheet, per_cluster), 
-                     file.path("markers",                                  "transcription_factors_per_td_injured_clusters_downregulated.xlsx"))
+                     file.path("markers",                                  "transcription_factors_per_td_injured_clusters_downregulated_012519.xlsx"))
 
 ```
 ## Find Cell Surface Markers {.tabset .tabset-fade}
