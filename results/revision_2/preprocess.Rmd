@@ -1,0 +1,962 @@
+---
+title: "Refilter and adjust TSNE"
+author: "Kent Riemondy RBI"
+date: '`R Sys.Date()`'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+data_dir <- file.path(data_dir, "updated")
+```
+
+## Experiment Summary
+  In the lung alveolar walls there are three major types of cells. Type I cells are thin cells that allow gas exchange to capillaries. Type II cells are granular cells that release surfacant substances to promote a low surface tension environment. Lastly, macrophages are also present and phagocytose foreign materials.  
+  
+  The Type I cells are terminally differentiated, and are unable to replicate in response to damaging insults. Type II cells proliferate and transdifferentiate into Type I cells to restore Type I cell populations following injury. However, the molecular mechanisms regulating the transdifferentiation process *in vivo* remain inadequately characterized. 
+  
+  Single cell RNA-Seq was performed on ATI and ATII cell populations isolated from control or injured mice. The goal of this experiment is gain unique insight into transcriptomes of cells undergoing transdifferentiation, hopefully uncovering novel markers for further characterization, and potential regulatory factor to further investigate.  
+  
+  The single cell experiment was performed twice. The repeat experiment had a similar design, except that many more injured type II cells were capured. 
+  
+  
+Experment | Sample | Description
+------------- | ---------------- | --------------------
+2017-06-23 | 3161-ATII-1 | Control Mouse, Type I Alveolar cells, rep. 1
+2017-06-23 | 3161-ATII-2 | Control Mouse, Type I Alveolar cells, rep. 2
+2017-06-23 | 3161-ATII-3 | Control Mouse, Type II Alveolar cells
+2017-06-23 | 3162-ATIII-5 | Injured Mouse (LPS), Type II Alveolar cells, rep. 2
+2017-06-23 | 3162-ATII-4 | Injured Mouse (LPS), Type II Alveolar cells, rep 1
+2017-07-28 | 3242ATI1 | Control Mouse, Type I Alveolar cells, rep. 1
+2017-07-28 | 3242ATI2  | Control Mouse, Type I Alveolar cells, rep. 2
+2017-07-28 | 3242ATII3  | Control Mouse, Type II Alveolar cells
+2017-07-28 | 3241ATII4 | Injured Mouse (LPS), Type II Alveolar cells, rep. 1 
+2017-07-28 | 3241ATII5 | Injured Mouse (LPS), Type II Alveolar cells, rep 2
+
+
+## Preprocess to produce TSNE and clustering
+  10x genomics implements a normalization strategy to compare multiple experiments that involves downsampling the mapped reads (from molecule.h5 hdf5 file) using `rbinom()`. The TSNEs and clustering produced by this method seem to perform better (less granular, more continuos populations), so this approach will be used to generate the cell embeddings and cluster ids. The full matrices will then be used for differential gene expression and other downstream analyses.  
+
+```{r downsampled}
+
+sample_paths_exp2 <-  file.path(data_dir ,
+                               "20170728_zeeman_expt2", 
+                               "aggregated_all_expts",
+                               "outs",
+                               "filtered_gene_bc_matrices_mex",
+                               "mm10")
+atcells <- Read10X(sample_paths_exp2)
+
+expt_names <- c("ATIIinjured1expt1",
+                "ATIIinjured1expt2",
+                "ATIIinjured2expt2",
+                "ATI1expt2",
+                "ATI2expt2",
+                "ATII1expt2",
+                "ATI1expt1", 
+                "ATI2expt1", 
+                "ATII1expt1", 
+                "ATIIinjured2expt1")
+                
+expt_names <- data.frame(id = as.character(1:10),
+                         sample_names = expt_names, stringsAsFactors = F)         
+mdata <- data.frame(cell = colnames(atcells))
+mdata <- mutate(mdata, 
+                orig.ident = str_split(cell, "-", simplify = T) %>%  .[, 2])
+
+new_dat <- left_join(mdata, expt_names, by = c("orig.ident" = "id")) %>% as.data.frame()
+## rename cells to match non-aggregate matrices
+
+new_dat <- mutate(new_dat, 
+         cell = str_c(sample_names, "_", cell),
+         cell = str_replace(cell, "-[0-9]+$", ""))
+
+colnames(atcells) <- new_dat$cell
+
+atcells <- CreateSeuratObject(raw.data = atcells, 
+                   project = "Zemans",
+                   min.cells = 3,
+                   min.genes = 100, 
+                   names.field = 1, 
+                   names.delim = "_")
+
+new_dat <- data.frame(row.names = rownames(atcells@meta.data),
+                      sample_names = atcells@meta.data$orig.ident)
+atcells <- AddMetaData(atcells, new_dat)
+atcells <- SetAllIdent(atcells, "sample_names")
+
+# add experiment replicate number
+ids <- atcells@meta.data$sample_names
+ids <- str_extract(ids, "expt[12]")
+ids <- data.frame(row.names = atcells@cell.names,
+                  expt = ids)
+atcells <- AddMetaData(atcells, ids)
+
+```
+
+```{r process_down_sampled, fig.height = 8}
+mito.genes <- grep("^mt-", rownames(atcells@data), value = T)
+proportion.mito <- Matrix::colSums(atcells@raw.data[mito.genes, ]) /
+  Matrix::colSums(atcells@raw.data)
+
+atcells <- AddMetaData(atcells, proportion.mito, "proportion.mito")
+
+## exclude cells with nUMI > 3 sds away from mean within each sample
+## or cells with log2(nUMI) < 10
+## or cells with % mito > 5
+include_cells <- atcells@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  group_by(sample_names) %>% 
+  mutate(mean = mean(nUMI), 
+         sd = sd(nUMI), 
+         cutoff = mean + (sd * 3), 
+         n_remove = n() - sum(nUMI < cutoff)) %>% 
+  dplyr::filter(nUMI < cutoff,
+                proportion.mito < 0.05,
+                nUMI > 2^10)
+
+atcells <- SubsetData(atcells, 
+                       cells.use = include_cells$cell)
+
+atcells <- NormalizeData(atcells, 
+                      normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+
+atcells <- ScaleData(atcells)
+
+atcells <- RunPCA(atcells, 
+               pc.genes = rownames(atcells@data), 
+               pcs.compute = 20,
+               do.print = FALSE, 
+               pcs.print = 1:5, 
+               genes.print = 5, 
+               seed.use = 20180504)
+
+atcells <- RunTSNE(atcells, 
+                   dims.use = 1:16, 
+                   do.fast = T, 
+                   seed.use = 20180501, 
+                   perplexity = 30)
+
+outdir <- "preprocess"
+dir.create(file.path(outdir, "misc"), recursive = T, showWarnings = F)
+
+plt <- TSNEPlot(atcells, 
+         colors.use = brewer.pal(n = 10, "Paired"), 
+         group.by = "sample_names", pt.size = 0.5)
+
+save_plot(file.path(outdir, "misc", "by_sample_tsne.pdf"), plt, base_width = 6)
+
+plt <- TSNEPlot(atcells, 
+         colors.use = brewer.pal(n = 10, "Paired"), 
+         group.by = "expt", pt.size = 0.5)
+save_plot(file.path(outdir, "misc", "by_expt_tsne.pdf"), plt, base_width = 6)
+
+plts <- FeaturePlot(atcells,
+            c("Top2a", "Hopx", "Sfn", "Ager", "Cav1", "Cav2"), do.return = T)
+pdf(file.path(outdir, "misc", "markers.pdf"))
+plts
+dev.off()
+
+plt <- DotPlot(atcells, genes.plot = c("Top2a", "Hopx", "Sfn", "Ager", "Cav1", "Cav2"), group.by = "orig.ident", do.return = T)
+save_plot(file.path(outdir, "misc", "dotplot_example.pdf"), plt)
+
+mito <- FeaturePlot(atcells, "proportion.mito", do.return = T)
+save_plot(file.path(outdir, "misc", "mito.pdf"), mito[[1]])
+```
+  
+  
+
+```{r plot_per_sample, fig.width = 16, fig.height= 10}
+sample_names <- unique(atcells@meta.data$sample_names)
+
+cell_ids <- map(sample_names, ~atcells@cell.names[atcells@meta.data$sample_names == .x])
+names(cell_ids) <- sample_names
+.cols <- brewer.pal(n = 10, "Paired")
+cols_to_pick <- list(c(1:9),
+                     c(2:7, 10:11),
+                     -7)
+p <- map(cell_ids,
+         ~TSNEPlot(atcells, 
+                   do.label = F, 
+                   pt.size = 0.5, 
+                   cells.use = .x, 
+                   do.return = T, 
+                   label.size = 5))
+
+p[[11]] <- TSNEPlot(atcells, 
+         colors.use = brewer.pal(n = 10, "Paired"), 
+         group.by = "sample_names", 
+         cells.use = unlist(cell_ids[c(7:10, 1)]),
+         do.return = T, label.size = 5, pt.size = 0.5)
+
+p[[12]] <- TSNEPlot(atcells, 
+         colors.use = brewer.pal(n = 10, "Paired"), 
+         group.by = "sample_names", 
+         cells.use = unlist(cell_ids[2:6]),
+         do.return = T, label.size = 5, pt.size = 0.5)
+p <- p[c(7:10, 1, 11, 4:6, 2:3, 12)]
+
+p <- map2(p, c(names(cell_ids)[c(7:10, 1)], "All expt1", names(cell_ids)[c(4:6, 2:3)], "All expt2"),
+            ~.x + 
+            coord_cartesian(c(-60, 60), c(-60, 60)) + 
+            labs(title = .y) +
+            theme(legend.position = ifelse(.y %in% c("All expt1",
+                                                     "All expt2"), 
+                                                     "right",
+                                           "none")))
+
+plt <- plot_grid(plotlist = p, nrow = 2, 
+                 align = "hv", rel_widths = c(rep(1, 5), 1.75))
+
+save_plot(file.path(outdir, "misc", "tsne_per_sample.pdf"), plt, 
+          base_width = 24, base_height = 9)
+```
+
+
+```{r cluster}
+
+atcells <- FindClusters(atcells, 
+                     reduction.type = "pca", 
+                     dims.use =  1:15, 
+                     k.param = 30, 
+                     resolution = 1.6, 
+                     print.output = 0, 
+                     plot.SNN = F,
+                     save.SNN = T, 
+                     random.seed = 20180403)
+
+plt <- TSNEPlot(atcells, pt.size = 0.5, do.label = T)
+save_plot(file.path(outdir, "misc", "clustering.pdf"), plt, base_width = 10, base_height = 8)
+
+atcells <- SetAllIdent(atcells, "res.1.6")
+
+params <- seq(0.3, 1.9, 0.3)
+for (i in seq_along(params)){
+   atcells <- FindClusters(atcells, 
+                     reduction.type = "pca", 
+                     dims.use = 1:15,
+                     k.param = 30, 
+                     resolution = params[i], 
+                     print.output = 0, 
+                     plot.SNN = F,
+                     save.SNN = T, 
+                     random.seed = 0)
+}
+
+clustering_params <- colnames(atcells@meta.data) %>% 
+  str_subset("res")
+
+# generate tsnes for each clustering setting
+clust_tsnes <- map(clustering_params,
+     function(x){
+       atcells <- SetAllIdent(atcells, x); 
+       TSNEPlot(atcells, 
+                pt.size = 0.5,
+                do.label = T,
+                label.size = 10,
+                do.return = T,
+                no.legend = T, 
+                plot.title = x)
+     })
+
+
+plt <- plot_grid(plotlist = clust_tsnes)
+save_plot(file.path(outdir, "clustering_params.pdf"), plt, nrow = 3, ncol = 3)
+
+```
+
+
+```{r marker genes, fig.width = 10, fig.height= 10}
+
+control_markers <- c(
+  "Ager", # mouse homologue of RAGE
+  "Aqp5",
+  "Pdpn", # T1-Alpha
+  "Scgb1a1",
+  "Scgb3a1")
+
+basal_cells <- c(
+  "Krt5",
+  "Krt14",
+  "Krt15",
+  "Trp63"
+)
+
+ciliary_cells <- c(
+  "Foxj1"
+)
+
+ae2 <- c(
+  "Sftpa1", #SPA
+  "Sftpc",
+  "Abca3",
+  "Muc1",
+  "Lyz2",
+  "Lamp3"
+  )
+
+
+g2_macro <- c(
+  "Col3a1",
+  "Col1a2",
+  "Col1a1",
+  "Fcer1g",
+  "Cd68",
+  "Cd53",
+  "Top2a",
+  "Cdk1",
+  "Mki67"
+)
+
+transdiff <- c(
+  "Cdk1",
+  "Mki67",
+  "Pdpn",
+  "Hopx",
+  "Sfn",
+  "Cldn4"
+)
+```
+
+```{r, fig.width=8, fig.height=8}
+FeaturePlot(atcells, control_markers, pt.size = .25)
+
+### ATII markers
+
+FeaturePlot(atcells, ae2, pt.size = .25)
+
+
+### Basal Cell markers
+
+FeaturePlot(atcells, basal_cells, pt.size = .25)
+
+
+### Ciliary Cell markers
+
+FeaturePlot(atcells, ciliary_cells, pt.size = 1)
+
+
+### Other population markers
+
+FeaturePlot(atcells, g2_macro, pt.size = .5)
+
+plts <- FeaturePlot(atcells, transdiff, pt.size = .5, 
+                    cols.use = rev(brewer.pal(11, "RdGy")[c(1:5, 7)]), do.return = T)
+plt <- plot_grid(plotlist = plts, nrow = 3)
+save_plot(file.path(outdir, "misc", "td_populations.pdf"), plt, base_width = 10, base_height = 8)
+```
+
+
+```{r merge}
+
+plt <- TSNEPlot(atcells, 
+         colors.use = brewer.pal(n = 8, "Set1"), 
+         group.by = "expt",
+         pt.size = 0.1)
+save_plot(file.path(outdir, "misc", "all_samples.pdf"), plt, base_width = 10, base_height = 8)
+
+#saveRDS(atcells, file.path(outdir, "s_obj.rds"))
+```
+
+```{r readin}
+#atcells <- readRDS(file.path(outdir, "s_obj.rds"))
+norm_metadata <- atcells@meta.data
+atcells_dr <- atcells@dr
+snn <- atcells@snn
+```
+
+
+## Add in undownsampled data for gene expression calcs
+
+```{r Zemans_data_full}
+
+samples <- c(
+  "3161-ATII-1",
+  "3161-ATII-2",
+  "3161-ATII-3",
+  "3162-ATII-5",
+  "3162-ATTII-4")
+
+sample_paths_exp1 <- file.path(data_dir ,
+                               "20170623_zeemans", 
+                               samples,
+                               "outs", "filtered_gene_bc_matrices", "mm10")
+      
+names(sample_paths_exp1) <- c("ATI1expt1", "ATI2expt1", "ATII1expt1", "ATIIinjured2expt1", "ATIIinjured1expt1")
+
+samples <- c(
+  "3241ATII4",
+  "3241ATII5",
+  "3242ATI1",
+  "3242ATI2",
+  "3242ATII3")
+
+sample_paths_exp2 <-  file.path(data_dir ,
+                               "20170728_zeeman_expt2", 
+                               samples,
+                               "outs", "filtered_gene_bc_matrices", "mm10")
+
+      
+names(sample_paths_exp2) <- c("ATIIinjured1expt2", "ATIIinjured2expt2", "ATI1expt2", "ATI2expt2", "ATII1expt2")
+
+sample_paths <- c(sample_paths_exp1, sample_paths_exp2)
+names(sample_paths) <- c(names(sample_paths_exp1), names(sample_paths_exp2))
+atcells <- Seurat::Read10X(sample_paths)
+```
+
+```{r create_seurat, message = F, results = 'hide', warning = F}
+atcells <- CreateSeuratObject(raw.data = atcells, 
+                   project = "Zemans",
+                   names.field = 1, 
+                   names.delim = "_")
+```
+
+```{r additional_mdata}
+# note that the ordering passed to cell ranger aggr was:
+# 3161-ATII-1
+# 3161-ATII-2
+# 3161-ATII-3
+# 3162-ATIII-5
+# 3162-ATII-4
+# typos in sample ids were introduced during the sequencing, and have been preserved here for clarity
+
+# add correct sample identifier
+atcells <- AddMetaData(atcells, data.frame(row.names = atcells@cell.names, 
+                                     "sample_names" = atcells@ident))
+
+# add experiment replicate number
+ids <- atcells@meta.data$orig.ident
+ids <- str_extract(ids, "expt[12]")
+ids <- data.frame(row.names = atcells@cell.names,
+                  expt = ids)
+atcells <- AddMetaData(atcells, ids)
+
+
+merge_samples <- tibble::tribble(
+  ~orig_id, ~new_expt_id,
+  "ATI1expt1", "Non-ATII epithelial expt.1",
+  "ATI1expt2", "Non-ATII epithelial expt.2",
+  "ATI2expt1", "Non-ATII epithelial expt.1",
+  "ATI2expt2", "Non-ATII epithelial expt.2",
+  "ATII1expt1", "ATII expt.1", 
+  "ATII1expt2", "ATII expt.2", 
+  "ATIIinjured1expt1", "ATII-injured expt.1", 
+  "ATIIinjured1expt2", "ATII-injured expt.2", 
+  "ATIIinjured2expt1", "ATII-injured expt.1", 
+  "ATIIinjured2expt2", "ATII-injured expt.2"
+)
+
+new_ids <- tibble::rownames_to_column(atcells@meta.data, "cell") %>% 
+     left_join(.,
+          merge_samples, 
+          by = c("sample_names" = "orig_id")) %>% 
+     select(cell, new_expt_id) %>% 
+  as.data.frame(row.names = .$cell) %>% 
+  .[, -1, drop = F]
+  
+atcells <- AddMetaData(atcells, new_ids)
+
+keep_cells <- rownames(atcells_dr$tsne@cell.embeddings)
+atcells <- SubsetData(atcells, cells.use = keep_cells)
+```
+
+## QC Metrics
+  
+```{r examine_umi_and_ngenes, fig.width = 10, fig.height = 8, warning = F}
+summary_dat <- data_frame(cell = colnames(atcells@raw.data), 
+                          nUMIs = colSums(as.matrix(atcells@raw.data)),
+                          nGenes = colSums(as.matrix(atcells@raw.data) > 0))
+
+summary_dat <- separate(summary_dat, cell, 
+                        c("sample", "cellid"), 
+                        sep = "_", remove = F)
+
+
+summary_dat <- summary_dat %>% 
+  dplyr::mutate(sample_names = sample)
+
+summary_dat <- summary_dat %>% 
+  group_by(sample_names) %>% 
+  dplyr::arrange(desc(nUMIs))
+
+n_cells <- summary_dat %>%  
+  group_by(sample_names) %>%  
+  summarize(n_cells = n(),
+            median_UMIs = median(nUMIs),
+            median_Genes = median(nGenes))
+
+knitr::kable(n_cells,
+             caption = "Number of cells prior to filtering and summary statistics")
+
+a <- ggplot(summary_dat, aes(sample, nUMIs)) +
+  geom_violin(aes(fill = sample_names)) +
+  scale_fill_brewer(palette = "Paired") +
+  ylab("Number of UMIs (Log10)") +
+  theme(axis.text.x = element_blank())
+
+b <- ggplot(summary_dat, aes(sample, nGenes)) +
+    geom_violin(aes(fill = sample_names)) +
+  scale_fill_brewer(palette = "Paired") +
+  ylab("Number of Genes (at least 1 UMI) Log10") +
+  theme(axis.text.x = element_blank())
+plot_grid(a, b, ncol = 1)
+```
+
+Overall the numbers of UMIs and genes detected are good and in the expected range for single cell data. 
+
+```{r utility_fxn}
+cell_counts <- function(seurat_object){
+  #returns tbl_df with number of cells per sample type in seurat object
+  map_df(levels(seurat_object@ident), 
+         ~data_frame(sample = .x, 
+                     n_cells = length(WhichCells(seurat_object, ident = .x))))
+}
+```
+
+## Mitochondrial Reads {.tabset .tabset-fade}
+
+The percentage of reads aligning to mitochondria is often an indicator of cell quality. Cells that have lysed prior to capture preferentially retain mitochondial RNA, but lose cellular cytoplasmic mRNA. As shown below there is a strong negative correlation with the number of UMIs and the proportion of reads aligning to mitochondria. Cells with less than 35% mitochondrial reads will be retained for further analysis.
+
+```{r QC_2}
+mito.genes <- grep("^mt-", rownames(atcells@raw.data), value = T)
+proportion.mito <- Matrix::colSums(atcells@raw.data[mito.genes, ]) /
+  Matrix::colSums(atcells@raw.data)
+
+proportion.mito.filtered <- Matrix::colSums(atcells@data[mito.genes, ]) /
+  Matrix::colSums(atcells@data)
+
+atcells <- AddMetaData(atcells, proportion.mito.filtered, "proportion.mito")
+
+unfiltered <- data_frame(cell = colnames(atcells@raw.data),
+                         proportion.mito) %>% 
+  left_join(summary_dat, by = c("cell"))
+
+ggplot(unfiltered, aes(sample_names,
+                       proportion.mito)) +
+  geom_violin(aes(fill = sample_names)) +
+  geom_jitter(size = 0.25) +
+  scale_fill_brewer(palette = "Paired") +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    axis.title.x = element_blank()
+  )
+```
+
+### All Samples
+
+```{r sample_ids}
+ggplot(unfiltered, 
+       aes(nUMIs, proportion.mito)) +
+  geom_point(aes(color = sample_names)) +
+  scale_color_brewer(palette = "Paired")
+```
+
+```{r, results ='asis'}
+
+sample_names <- as.character(unique(atcells@meta.data$orig.ident))
+per_sample <- map(sample_names, ~filter(unfiltered, 
+                                        sample == .x))
+
+# generate tab with individual plot programmatically 
+# see https://stackoverflow.com/questions/43752095/programmatically-insert-header-and-plot-in-same-code-chunk-with-r-markdown-using?noredirect=1&lq=1
+
+for(i in seq_along(per_sample)){
+  .col <- brewer.pal(10, "Paired")[i]
+  cat('\n### ', sample_names[i], '\n')
+  p <- ggplot(per_sample[[i]], aes(nUMIs, proportion.mito)) +
+        geom_point(aes(color = sample_names)) +
+        scale_color_manual(values = .col)
+  print(p)
+  cat('\n')
+}
+```
+
+Cells with low UMIs tend to have a higher percentage of mitochondrial reads, suggesting that these cells have lysed prematurely. However, overall a large proportion of cells are retained for further analysis after removing cells with > 35% UMIs derived from mitochondiral transcripts. 
+
+## Filtered Data {.tabset .tabset-fade}
+
+After filtering the distribution of UMIs, Genes, Proportion of mitochondrial reads, and number GFP reads are shown as selectable tabs. 
+
+```{r ngenes_filter}
+knitr::kable(cell_counts(atcells),
+             caption = "Number of cells passing an additional filter requiring less than 5% mitochondrial reads and at least 250 genes detected, and UMI < 45000, from downsampled matrix")
+```
+
+### Number of Genes
+```{r ngenes_post_filter}
+VlnPlot(atcells, "nGene", 
+        cols.use = brewer.pal(10, "Paired"),
+        group.by = "sample_names",
+        x.lab.rot = T)
+```
+
+### Number of UMIs
+```{r}
+VlnPlot(atcells, "nUMI", 
+        cols.use = brewer.pal(10, "Paired"),
+        group.by = "sample_names",
+        x.lab.rot = T)
+```
+
+### Proportion of Mitochondria
+```{r}
+VlnPlot(atcells, "proportion.mito", 
+        cols.use = brewer.pal(10, "Paired"),
+        group.by = "sample_names",
+        x.lab.rot = T)
+
+```
+
+### GFP counts
+```{r read_in_counts, message = F, eval = T}
+
+expt1_files <- dir(file.path(data_dir, "20170623_zeemans"),
+    pattern = "*_sorted_counts.txt", full.names = T, recursive = T)
+expt2_files <- dir(file.path(data_dir, "20170728_zeeman_expt2"),
+    pattern = "*_sorted_counts.txt", full.names = T, recursive = T)
+
+files <- c(expt1_files, expt2_files)
+
+dat <- map(files, read_tsv, col_names = c("cells", "gfp_counts"))
+
+dat <- map2(dat, names(sample_paths), ~dplyr::mutate(.x, group = .y))
+
+dat <- bind_rows(dat) 
+
+dat <- dplyr::mutate(dat, 
+              cells = str_split(cells, "-", simplify = T)[, 1],
+              cells = paste( group, cells, sep = "_" )) %>% 
+  dplyr::select(-group)
+
+#write out metadata 
+out_dat <- left_join(unfiltered,
+                        dat,
+                        by = c("cell" = "cells"))
+write_tsv(out_dat, file.path(outdir, "per_cell_stats.txt"))
+
+# only keep filtered cells
+dat <- dat %>% dplyr::filter(cells %in% atcells@cell.names)
+# add in not-detected cells
+dat <- left_join(data_frame(cells = atcells@cell.names), 
+                 dat, by = c("cells"))
+
+dat[is.na(dat)] <- 0
+dat <- as.data.frame(dat)
+
+rownames(dat) <- dat[, 1]
+dat[, 1] <- NULL
+
+# log Normalize
+dat <- as.data.frame(as.matrix(LogNormalize(dat) ))
+
+atcells <- AddMetaData(atcells, dat)
+
+#FeaturePlot(atcells, "gfp_counts")
+atcells <- SetAllIdent(atcells, id = "orig.ident")
+VlnPlot(atcells, 
+        "gfp_counts",
+        cols.use = brewer.pal(n = 10, "Paired"), 
+        group.by = "sample_names",
+        x.lab.rot = T)
+
+```
+
+The number of reads mapping to GFP is consistent with the sorting strategy utilized to isolate the cells. Very low numbers of reads map to GFP in the ATI population, in constrast to the ATII population which is GFP+. 
+
+
+  
+### Normalize the data
+  First the UMI count data will be normlized. The normalization is done by normalizing each count value to the total UMI count per sample, scaling by 10000, and log tranforming with a pseudocount of 1 to avoid taking the log of 0.
+
+```{r normalize, results = 'hide'}
+
+atcells <- NormalizeData(atcells, 
+                      normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+
+```
+
+
+
+  
+```{r add_in_prev_data}
+
+atcells@dr <- atcells_dr
+clust_ids <- norm_metadata[,
+                      str_subset(colnames(norm_metadata), 
+                                 "res"),]
+atcells <- AddMetaData(atcells, clust_ids)
+```
+
+### PCA Plots {.tabset .tabsetfade}
+  Shown in the tabs are 2 dimensional plots showing different principal components. Overall the data looks good as there is quite alot of structure to the data and many consisent populations that match the sample types are observed.
+  
+```{r pc_plots, results ='asis'}
+pcs <- list(
+  c(1, 2),
+  c(1, 3),
+  c(1, 4),
+  c(2, 3),
+  c(2, 4),
+  c(3, 4)
+)
+
+
+for(i in seq_along(pcs)){
+  cat('\n#### ', 'PC', pcs[[i]][1], ' vs PC', pcs[[i]][2], '\n', sep = "")
+  PCAPlot(atcells, 
+               pcs[[i]][1], 
+               pcs[[i]][2], 
+               cols.use = brewer.pal(10, "Paired"), 
+        group.by = "sample_names")
+  #print(p)
+  cat('\n')
+}
+```
+
+
+  
+  Shown below is a TSNE projection of the single cell data, with each cell colored by the sample type. The TSNE project shows a very consistent pattern between the replicate experiments. The clusters all overlap very nicely, with a few exceptions. In the injured type II samples there are some distinct clusters. However overall the two experiments overlap very well. There is a normalization approach that I tested (using [this](http://www.biorxiv.org/content/early/2017/07/18/164889) method) to further align the data between the two experiments, however the overlap didn't improve (see .html [report]("../2018-01-18_aligning/2018-01-18_aligning.html")), and therefore I don't think additional alignment efforts are necessary. 
+  
+#### Sample Names
+
+```{r plot_TSNE, fig.width = 10, fig.height = 10}
+TSNEPlot(atcells, 
+         colors.use = brewer.pal(n = 10, "Paired"), 
+         group.by = "sample_names")
+```
+
+#### Experiment
+```{r, fig.width = 10, fig.height = 10 }
+TSNEPlot(atcells, 
+         colors.use = brewer.pal(n = 10, "Paired"), 
+         group.by = "expt")
+```
+
+#### GFP
+```{r, fig.width = 10, fig.height = 10 }
+FeaturePlot(atcells, "gfp_counts")
+```
+
+#### Genes Detected
+```{r, fig.width = 10, fig.height = 10 }
+FeaturePlot(atcells, "nGene", no.legend = F)
+```
+
+#### UMIs Detected
+```{r, fig.width = 10, fig.height = 10 }
+FeaturePlot(atcells, "nUMI", no.legend = F)
+
+```
+
+#### Proportion Mito
+```{r, fig.width = 10, fig.height = 10 }
+FeaturePlot(atcells, "proportion.mito", no.legend = F)
+
+```
+
+## Clusters
+
+```{r clusters}
+atcells <- SetAllIdent(atcells, "res.0.6")
+TSNEPlot(atcells, do.label = T)
+
+```
+## Marker gene expression for each cluster {.tabset .tabset-fade}
+
+  Plotted below are a set of known marker genes that help to identify each cell population. Classifications taken from
+http://www.nature.com/nature/journal/v507/n7491/fig_tab/nature12930_ST1.html
+http://www.atsjournals.org/doi/pdf/10.1165/rcmb.2017-0037MA
+http://www.jci.org/articles/view/68782
+
+Click on the tabs to view other markers
+
+```{r marker genes 2, fig.width = 10, fig.height= 10}
+
+control_markers <- c(
+  "Ager", # mouse homologue of RAGE
+  "Aqp5",
+  "Pdpn", # T1-Alpha
+  "Scgb1a1",
+  "Scgb3a1")
+
+basal_cells <- c(
+  "Krt5",
+  "Krt14",
+  "Krt15",
+  "Trp63"
+)
+
+ciliary_cells <- c(
+  "Foxj1"
+)
+
+ae2 <- c(
+  "Sftpa1", #SPA
+  "Sftpc",
+  "Abca3",
+  "Muc1",
+  "Lyz2",
+  "Lamp3"
+  )
+
+
+g2_macro <- c(
+  "Col3a1",
+  "Col1a2",
+  "Col1a1",
+  "Fcer1g",
+  "Cd68",
+  "Cd53",
+  "Top2a",
+  "Cdk1",
+  "Mki67"
+)
+
+transdiff <- c(
+  "Cav1",
+  "Cav2",
+  "Pdpn",
+  "Hopx",
+  "Sfn",
+  "Epcam"
+)
+```
+
+### ATI markers
+```{r, fig.width=10, fig.height=10}
+FeaturePlot(atcells, control_markers, pt.size = .25)
+```
+
+### ATII markers
+```{r, fig.width=10, fig.height=10}
+FeaturePlot(atcells, ae2, pt.size = .25)
+```
+
+### Basal Cell markers
+```{r, fig.width=10, fig.height=10}
+FeaturePlot(atcells, basal_cells, pt.size = .25)
+```
+
+### Ciliary Cell markers
+```{r, fig.width=10, fig.height=10}
+FeaturePlot(atcells, ciliary_cells, pt.size = 1)
+```
+
+### Other population markers
+```{r, fig.width=10, fig.height=10}
+FeaturePlot(atcells, g2_macro, pt.size = .25)
+
+```
+
+### Transdifferentiation
+```{r, fig.width=10, fig.height=10}
+FeaturePlot(atcells, transdiff, pt.size = .25)
+```
+
+## Labeling Cell types
+
+Based on these data I proposed the following classification (TSNE plotted again below):
+
+  
+```{r, fig.width = 16, fig.height = 16}
+
+rename_ids <- tibble::tribble(
+  ~cluster, ~labeled_clusters,
+  "5", "Naive Type II",
+  "0", "Injured Type II",
+  "1", "Injured Type II",
+  "2", "Injured Type II",
+  "3", "Injured Type II",  
+  "4", "Injured Type II",
+  "6", "Transdifferentiating Type II",
+  "8", "Cell Cycle Arrest Type II",
+  "7", "Basal",
+  "13", "Club",
+  "10", "Proliferating Type II",
+  "11", "Macrophages",
+  "9", "Club",
+  "12", "Endothelial", 
+  "14", "Naive Type I",
+  "15", "Ciliary"
+)
+
+stopifnot(length(unique(rename_ids$cluster)) == nrow(rename_ids))
+
+ids <- data_frame(cell = rownames(atcells@meta.data),
+                  cluster = atcells@meta.data$res.0.6)
+new_ids <- left_join(ids, rename_ids, 
+                     by = "cluster") %>% 
+  dplyr::select(-cluster)
+
+rownames(new_ids) <- new_ids$cell
+new_ids[, 1] <- NULL
+
+atcells <- AddMetaData(atcells, new_ids)
+
+TSNEPlot(atcells, 
+        colors.use = brewer.pal(n = 12, "Paired"), 
+        group.by = "labeled_clusters",
+         do.label = T, label.size = 12,
+        pt.size = 3)
+
+```
+
+## Distribution of cells per cell type
+
+  Overall the cell types detected are pretty similar between experiments. 
+```{r cluster_distribution, fig.width = 16, fig.height = 10}
+cluster_ids <- atcells@ident
+cell_ids <- atcells@meta.data$orig.ident
+
+cluster_summary <- data_frame(id = cell_ids, cluster = cluster_ids)
+cluster_summary <- group_by(cluster_summary, id, cluster) %>% summarize(cells = n())
+
+plt <- ggplot(cluster_summary, aes(cluster, cells, fill = cluster)) +
+  facet_wrap(~id, scales = "free_y",nrow = 2) +
+  ylab("Number of Cells") +
+ # scale_fill_brewer(palette = "Paired") +
+  geom_bar(stat = "identity") +
+  theme(
+    axis.text.x = element_blank()
+  )
+  
+save_plot(file.path(outdir, "misc", "cells_per_cluster.pdf"), plt, base_width = 16)
+```
+
+```{r save}
+saveRDS(atcells, file.path(outdir, "s_obj_final.rds"))
+
+mdata_geo <- atcells@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  select(cell:orig.ident, expt, new_expt_id, labeled_clusters)
+colnames(mdata_geo) <- c("cell",
+                         "nGene",
+                         "nUMI",
+                         "sample_id",
+                         "experiment_number",
+                         "sample_name",
+                         "cell_type_name")
+write_tsv(mdata_geo, file.path(outdir, "cell_metadata.tsv"))
+R.utils::gzip(file.path(outdir, "cell_metadata.tsv"), overwrite = T)
+```
+
+## Session Info
+```{r ses}
+sessionInfo()
+```

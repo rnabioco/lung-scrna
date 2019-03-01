@@ -1,0 +1,1326 @@
+---
+title: "Enriched Markers and gene set analysis"
+author: "Kent Riemondy RBI"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache.lazy = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+data_dir <- file.path(data_dir, "updated")
+```
+
+
+## Goal
+
+  Examine marker genes that are enriched in interesting populations. 
+  
+```{r load_dat}
+atcells <- readRDS(file.path("preprocess", "s_obj_final.rds"))
+mdata <- atcells@meta.data
+outdir <- "markers"
+dir.create(outdir, showWarnings = F)
+
+new_mdata <- tibble::rownames_to_column(mdata, "cell") %>% 
+  dplyr::mutate(sample_type = ifelse(str_detect(new_expt_id, 
+                                                 "Non-ATII epithelial"),
+                                            "Naive Non-AT-II Epithelial",
+                                            ifelse(str_detect(new_expt_id,
+                                                              "ATII expt"),
+                                                   "Naive AT-II",
+                                                   "Injured AT-II")),
+               experiment = ifelse(expt == "expt1", 
+                                   "Experiment 1",
+                                   "Experiment 2")) %>% 
+  dplyr::select(cell, sample_type, experiment) %>% 
+  tibble::column_to_rownames("cell")
+
+atcells <- AddMetaData(atcells, new_mdata)
+
+cell_id_relabel <- c("Endothelial" = "Endothelial/Fibroblast",
+  "Basal" = "Basal",
+  "Club" = "Club",
+  "Ciliary" = "Ciliated",
+  "Naive Type I" = "Naive AEC1",
+  "Macrophages" = "Macrophage",
+  "Injured Type II" = "Other Injured AEC2",
+  "Proliferating Type II" = "Injured AEC2: Proliferating",
+  "Cell Cycle Arrest Type II" = "Injured AEC2: Cell Cycle Arrest",
+  "Transdifferentiating Type II" = "Injured AEC2: Transdifferentiating",
+  "Naive Type II" = "Naive AEC2")
+
+
+m_df <- data.frame(row.names = rownames(atcells@meta.data),
+                       pretty_cell_labels = cell_id_relabel[atcells@meta.data$labeled_clusters])
+
+m_df$pretty_cell_labels <- factor(m_df$pretty_cell_labels,
+                                  levels = cell_id_relabel)
+
+atcells <- AddMetaData(atcells, m_df)
+
+```
+
+
+```{r id_tsne, fig.width = 14, fig.height = 10, fig.cap= "TSNE plot with each cell colored by the cluster id"}
+atcells <-SetAllIdent(atcells, "res.0.6")
+TSNEPlot(atcells,
+         colors.use = viridis::viridis(25),
+         do.return = F,
+         pt.size = 0.5, 
+         label.size = 12,
+         do.label = T)
+```
+
+
+```{r ct_tsne, fig.width = 14, fig.height = 10, fig.cap= "TSNE plot with each cell colored by a defined cell type"}
+atcells <-SetAllIdent(atcells, "pretty_cell_labels")
+TSNEPlot(atcells,
+         colors.use = brewer.pal(n = 12, "Paired"),
+         do.return = T,
+         pt.size = 0.5)
+```
+
+
+### All clusters
+
+```{r id_tsne1, fig.width = 14, fig.height = 10, fig.cap= "TSNE plot with each cell colored by the cluster id"}
+atcells <- SetAllIdent(atcells, "res.0.6")
+
+all_cluster_markers <- FindAllMarkers(atcells, 
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+
+write_tsv(all_cluster_markers, file.path(outdir,
+                                         "all_cluster_markers_wilcox.txt"))
+```
+
+### All injured
+
+```{r inj}
+inj_clusters <- c("0",
+                  "1",
+                  "2",
+                  "3",
+                  "4")
+
+inj_cells <- rownames(atcells@meta.data)[atcells@meta.data$res.0.6 %in%
+                                           inj_clusters]
+
+tmp_dat <- SubsetData(atcells, cells.use = inj_cells)
+tmp_dat <- SetAllIdent(tmp_dat, "res.0.6")
+inj_cluster_markers <- FindAllMarkers(tmp_dat, 
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+write_tsv(inj_cluster_markers,
+          file.path(outdir,
+            "injured_cluster_markers_wilcox.txt"))
+rm(tmp_dat)
+gc()
+```
+
+### All injured against naive type II
+
+```{r inj}
+inj_clusters <- c("0",
+                  "1",
+                  "2",
+                  "3",
+                  "4")
+
+inj_cells <- rownames(atcells@meta.data)[atcells@meta.data$res.0.6 %in%
+                                           inj_clusters]
+naive_type_ii <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters == "Naive Type II"]
+
+selected_cells <- c(inj_cells, naive_type_ii)
+
+tmp_dat <- SubsetData(atcells, cells.use = selected_cells)
+tmp_dat <- SetAllIdent(tmp_dat, "res.0.6")
+
+
+inj_vs_naive_cluster_markers <- FindAllMarkers(tmp_dat, 
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+names(inj_vs_naive_cluster_markers) <- paste0(inj_clusters,
+                                              "_vs_naive_AEC2")
+
+inj_vs_naive_cluster_markers <- map(inj_vs_naive_cluster_markers, 
+                                    as_tibble, 
+                                    rownames = "gene")
+
+mks_df <- bind_rows(inj_vs_naive_cluster_markers, .id = "comparison")
+
+write_tsv(mks_df,
+          file.path(outdir,
+            "injured_cluster_vs_naive_t2_markers_wilcox.txt"))
+rm(tmp_dat)
+gc()
+```
+
+
+### All labeled cell types
+
+```{r}
+
+all_cell_type_markers <- FindAllMarkers(SetAllIdent(atcells, "pretty_cell_labels"),
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+write_tsv(all_cell_type_markers,
+          file.path(outdir,
+            "all_labled_cell_markers_wilcox.txt"))
+```
+
+### Naive I/II and td pops
+
+```{r}
+
+query_cell_types <- c(
+  "Proliferating Type II",
+  "Cell Cycle Arrest Type II",
+  "Transdifferentiating Type II",
+  "Injured Type II",
+  "Naive Type I",
+  "Naive Type II")
+
+query_cell_ids <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in% query_cell_types]
+
+atcells_subset <- SubsetData(atcells, cells.use = query_cell_ids)
+
+query_cell_type_markers <- FindAllMarkers(SetAllIdent(atcells_subset, "pretty_cell_labels"),
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+write_tsv(query_cell_type_markers,
+          file.path(outdir,
+            "td_pops_and_naive_markers_wilcox.txt"))
+```
+
+
+### Naive
+```{r find_markers_naive_cells}
+atcells <- SetAllIdent(atcells, "labeled_clusters")
+
+all_cell_types <- unique(atcells@meta.data$labeled_clusters)
+naive_cell_types <- all_cell_types[!str_detect(all_cell_types, 
+                               "Proliferating|Injured|Transdifferentiating|Arrest")]
+naive_cell_ids <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in% naive_cell_types]
+naive_atcells <- SubsetData(atcells, cells.use = naive_cell_ids)
+
+naive_atcells_markers <- FindAllMarkers(naive_atcells, 
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+write_tsv(naive_atcells_markers, file.path(outdir, "naive_cell_types_markers_wilcox.txt"))
+```
+
+
+### Naive with special groups
+```{r find_markers_naive_cells_exclude_injured}
+atcells <- SetAllIdent(atcells, "labeled_clusters")
+
+all_cell_types <- unique(atcells@meta.data$labeled_clusters)
+naive_cell_types <- all_cell_types[!str_detect(all_cell_types, 
+                                               "Macrophages|Endothelial")]
+
+non_at_cells <- naive_cell_types[!str_detect(naive_cell_types, "I")]
+td_pops <- naive_cell_types[str_detect(naive_cell_types,
+                                       "Arrest|Proliferating|Transdifferentiating|Injured")]
+
+expt_ids <- unique(atcells@meta.data$new_expt_id)
+naive_expt_ids <- expt_ids[!str_detect(expt_ids, "injured")]
+
+naive_sample_mdata <- atcells@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  filter(new_expt_id %in% naive_expt_ids,
+         !labeled_clusters %in% c("Macrophages", "Endothelial")) %>% 
+  mutate(naive_regrouped = ifelse(labeled_clusters %in% non_at_cells,
+                                  labeled_clusters,
+                                  ifelse(str_detect(new_expt_id,
+                                                      "^Non-ATII") &
+                                           labeled_clusters == "Naive Type I",
+                                         "Naive Type I",
+                                         ifelse(str_detect(new_expt_id,
+                                                      "^ATII"),
+                                           "Naive Type II",
+                                           "Unknown")))) %>% 
+  filter(naive_regrouped != "Unknown") %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell")
+
+naive_atcells <- SubsetData(atcells, 
+                            cells.use = rownames(naive_sample_mdata))
+
+naive_atcells <- AddMetaData(naive_atcells, 
+                             naive_sample_mdata[, "naive_regrouped", drop = F])
+naive_atcells <- SetAllIdent(naive_atcells, "naive_regrouped")
+
+p <- TSNEPlot(naive_atcells, pt.size = 0.5)
+save_plot("markers/subsetting_for_naive_noninjured.pdf", p)
+
+
+naive_atcells_markers <- FindAllMarkers(naive_atcells, 
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+write_tsv(naive_atcells_markers, 
+          file.path(outdir, 
+                    "naive_cell_types_no_injured_markers_wilcox.txt"))
+```
+
+### Injured vs. Naive
+```{r injured_vs_naive_tII}
+atcells <- SetAllIdent(atcells, "labeled_clusters")
+
+injured_naive_markers <- FindMarkers(atcells, 
+                                     ident.1 = "Injured Type II",
+                                     ident.2 = "Naive Type II",
+                                     only.pos = TRUE,  
+                                     min.pct = 0.25, 
+                                     thresh.use = 0.25)
+injured_naive_markers <- tibble::rownames_to_column(injured_naive_markers, 
+                                                    "gene") 
+write_tsv(injured_naive_markers, file.path(outdir, "injured_vs_naive_markers_wilcox.txt"))
+
+```
+
+
+### TD populations
+
+```{r find_markers_td_pos}
+atcells <- SetAllIdent(atcells, "labeled_clusters")
+
+all_cell_types <- unique(atcells@meta.data$labeled_clusters)
+td_cell_types <- all_cell_types[str_detect(all_cell_types, 
+                               "Proliferating|Injured|Transdifferentiating|Arrest")]
+td_cell_types <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in% td_cell_types]
+td_atcells <- SubsetData(atcells, cells.use = td_cell_types)
+td_atcells <- SetAllIdent(td_atcells, "labeled_clusters")
+
+td_markers <- FindAllMarkers(td_atcells, 
+                             only.pos = TRUE,  
+                             min.pct = 0.25, 
+                             thresh.use = 0.25)
+
+write_tsv(td_markers, file.path(outdir, "td_injured_markers_wilcox.txt"))
+
+td_markers <- FindAllMarkers(td_atcells, 
+                             only.pos = FALSE,  
+                             min.pct = 0.25, 
+                             thresh.use = 0.25)
+
+write_tsv(td_markers, file.path(outdir,
+                                "td_injured_posneg_markers_wilcox.txt"))
+```
+
+
+```{r just_td_pos}
+atcells <- SetAllIdent(atcells, "labeled_clusters")
+
+all_cell_types <- unique(atcells@meta.data$labeled_clusters)
+td_cell_types <- all_cell_types[str_detect(all_cell_types, 
+                               "Proliferating|Transdifferentiating|Arrest")]
+td_cell_types <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in% td_cell_types]
+td_atcells <- SubsetData(atcells, cells.use = td_cell_types)
+td_atcells <- SetAllIdent(td_atcells, "labeled_clusters")
+
+td_markers <- FindAllMarkers(td_atcells, 
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+write_tsv(td_markers, file.path(outdir, "td_markers_wilcox.txt"))
+
+```
+
+
+```{r check_on_at2stem}
+atstems <- atcells@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  mutate(atstem_classes = ifelse(str_detect(new_expt_id,
+                                            "^ATII expt.") & 
+                                   labeled_clusters == "Proliferating Type II",
+         "at2_naive_prolif",
+         ifelse(str_detect(new_expt_id,
+                           "^ATII-injured") & 
+                                   labeled_clusters == "Proliferating Type II",
+         "at2_injured_prolif",
+         NA))) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell")
+
+atstem_cells <- SubsetData(atcells, cells.use = rownames(na.omit(atstems)))
+atstem_cells <- AddMetaData(atstem_cells, atstems[, "atstem_classes", drop = F])
+atstem_cells <- SetAllIdent(atstem_cells, "atstem_classes")
+
+atstem_markers <- FindMarkers(atstem_cells, 
+                              ident.1 = "at2_naive_prolif", 
+                              ident.2 = "at2_injured_prolif") %>% 
+  tibble::rownames_to_column("gene")
+
+write_tsv(atstem_markers, file.path("markers", "atstem_markers.txt"))
+openxlsx::write.xlsx(atstem_markers, 
+                     file.path("markers",
+                               "atstem_markers.xlsx"))
+
+```
+
+## Marker Tables
+
+```{r all_clusters}
+markers <- read_tsv(file.path(outdir, "all_cluster_markers_wilcox.txt"))
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_cluster.xlsx"))
+
+```
+
+
+```{r all_clusters_labeled}
+markers <- read_tsv(file.path(outdir, "all_labled_cell_markers_wilcox.txt"))
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells.",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+names(list_of_markers) <- str_replace(names(list_of_markers), ":", "")  %>% str_replace("/", "_")
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_labeled_cluster.xlsx"))
+
+```
+
+```{r selected_clusters_labeled}
+markers <- read_tsv(file.path(outdir, "td_pops_and_naive_markers_wilcox.txt"))
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+names(list_of_markers) <- str_replace(names(list_of_markers), ":", " ")
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                            "markers_per_td_pops_and_naive_clusters.xlsx"))
+
+```
+
+
+```{r all_injured_clusters}
+markers <- read_tsv(file.path(outdir, "injured_cluster_markers_wilcox.txt"))
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each injured AEC2 cluster and all other injured AEC2 cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_injured_cluster.xlsx"))
+
+```
+
+```{r naivemarkers}
+markers <- read_tsv(file.path("markers",
+                          "naive_cell_types_no_injured_markers_wilcox.txt"))
+
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between cell types identified in Naïve AEC2 and Naïve Non-AEC2 Epithelial Cell populations",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_naive_cell_type.xlsx"))
+```
+
+```{r tdmarkers}
+markers <- read_tsv(file.path("markers",
+                          "td_markers_wilcox.txt"))
+
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between transitioning cell types identified in Injured AEC2",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers","markers_per_td_population.xlsx"))
+```
+
+```{r injuredtypeimarkers, eval = F}
+markers <- read_tsv(file.path("markers",
+                          "td_injured_typei_markers_wilcox.txt"))
+
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between transitioning cell types identified in Injured AEC2, all other injured AEC2, and Naïve AEC1 cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, list_of_markers), 
+                     file.path("markers",
+                               "markers_per_naive_typei_td_populations_injured.xlsx"))
+```
+
+```{r injured_td_pops}
+
+markers <- read_tsv(file.path("markers",
+                          "td_injured_markers_wilcox.txt"))
+
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between transitioning cell types identified in Injured AEC2 and all other injured AEC2",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, list_of_markers), 
+                     file.path("markers",
+                               "markers_per_td_populations_injured.xlsx"))
+
+
+```
+
+```{r injuredvnaive_aec2}
+markers <- read_tsv(file.path("markers",
+                          "injured_cluster_vs_naive_t2_markers_wilcox.txt"))
+
+markers <- set_xlsx_class(markers, "gene", "Text")
+markers <- split(markers, markers$comparison)
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between non-transitioning injured AEC2, and Naïve AEC2 cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+
+openxlsx::write.xlsx(c(readme_sheet, markers),
+                     file.path("markers","markers_per_naive_typeii_vs_each_injured_cluster.xlsx"))
+
+```
+
+```{r updown_injuredtypei}
+
+markers <- read_tsv(file.path("markers", 
+                    "td_injured_posneg_markers_wilcox.txt")) %>% 
+  filter(avg_logFC < 0)
+
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes downregulated between transitioning cell types identified in Injured AEC2",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_td_populations_injured_downregulated.xlsx"))
+```
+
+
+```{r naive_v_injured_clusters}
+
+markers <- read_tsv(file.path("markers", 
+                    "td_injured_posneg_markers_wilcox.txt")) %>% 
+  filter(avg_logFC < 0)
+
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between injured AEC2 clusters and Naive AEC2 cluster",
+  "",
+  "Columns",
+  "comparison",
+  "gene",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj"
+), Description = c(
+  "",
+  "",
+  "clusters tested against naive AEC2",
+  "gene name",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_td_populations_injured_downregulated.xlsx"))
+```
+
+## Gene sets (TFs, Motility Genes, Cell surface markers)
+
+### Find Transcription Factors {.tabset .tabset-fade}
+ 
+ To identify potential important regulators of transdifferentiation, transcription factors will be identified that are enriched in each cell type. A database of known TFs was queried (taken from this [paper](https://academic.oup.com/bioinformatics/article/29/19/2519/190534/TFcheckpoint-a-curated-compendium-of-specific-DNA) in bioinformatics) to select TFs. Shown below are the TFs found in each cluster ranked by enrichment in the cluster compared to all other clusters. 
+ 
+ Tfs were selected by being called TFS by either the TF checkpoint database of the DBD database (columns DbTF == "yes" or DBD == "DBD")
+ 
+```{r, results = 'hide', message = F, eval = T}
+# https://academic.oup.com/bioinformatics/article/29/19/2519/190534/TFcheckpoint-a-curated-compendium-of-specific-DNA
+library(org.Mm.eg.db)
+dir.create("extdata")
+tfdata <- file.path("extdata", "TFCheckpoint_download_180515.txt")
+if(!file.exists(tfdata)) {
+  download.file("http://www.tfcheckpoint.org/data/TFCheckpoint_download_180515.txt", tfdata)
+}
+
+tfs <- read_tsv(tfdata)
+ 
+# map entrez id to symbol
+eid_to_symbol <- select(org.Mm.eg.db, 
+                        keys = keys(org.Mm.eg.db), 
+                        columns = c("ENTREZID", "SYMBOL"))
+ 
+eid_to_symbol[["ENTREZID"]] <- as.integer(eid_to_symbol[["ENTREZID"]])
+
+# filter non-mouse tfs, and add in symbol
+annotated_tfs <- left_join(tfs, tbl_df(eid_to_symbol), 
+          by = c("entrez_mouse" = "ENTREZID")) %>% 
+  dplyr::filter(entrez_mouse != 0,  #0 is na 
+                DBD == "DBD" | DbTF == "yes")  #remove annotations like BMP4
+
+# select td markers
+markers <- read_tsv(file.path("markers", 
+                              "td_injured_markers_wilcox.txt"))
+
+# find clusters associated with transcription factors
+tf_annotated <- left_join(markers, 
+          annotated_tfs, by = c("gene" = "SYMBOL")) 
+
+tf_info <- tf_annotated %>% 
+  dplyr::filter(entrez_mouse != 0) %>% 
+  dplyr::select(p_val:gene, gene_name) 
+
+clusters <- unique(tf_info$cluster)
+```
+
+```{r write_tfs_xlsx}
+
+# set gene and gene_name cols to Text to avoid renaming to dates
+per_cluster <- map(split(tf_info, tf_info$cluster),
+    ~set_xlsx_class(.x, 
+                    c("gene_name", "gene"), 
+                    "Text"))
+
+# set numbers to scientific for pvals
+per_cluster <- map(per_cluster,
+    ~set_xlsx_class(.x, 
+                    "p_val", 
+                    "Scientific"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Transcription factors differentially expressed between transitioning cell types identified in Injured AEC2 and all other injured AEC2. Transcription factors were identified from the TFCheckpoint database",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene",
+  "gene_description"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name",
+  "description of each gene"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+# each element of named lists will become a seperate sheet
+openxlsx::write.xlsx(c(readme_sheet, per_cluster), 
+                     file.path("markers",                                  "transcription_factors_per_td_injured_clusters_01252019.xlsx"))
+```
+
+#### TFs enriched in `r clusters[1]`
+```{r}
+dplyr::filter(tf_info, 
+              cluster == clusters[1]) %>% 
+    as.data.frame()
+```
+
+#### TFs enriched in `r clusters[2]`
+```{r}
+dplyr::filter(tf_info, cluster == clusters[2]) %>% 
+    as.data.frame()
+```
+
+#### TFs enriched in `r clusters[4]`
+```{r}
+dplyr::filter(tf_info, cluster == clusters[3]) %>% 
+    as.data.frame()
+```
+
+#### TFs enriched in `r clusters[4]`
+```{r}
+dplyr::filter(tf_info, cluster == clusters[4]) %>% 
+    as.data.frame()
+```
+
+### Also write out up and down regulated tfs
+
+```{r updown}
+markers <- read_tsv(file.path("markers", 
+                              "td_injured_posneg_markers_wilcox.txt"))  %>% 
+  filter(avg_logFC < 0)
+
+# find clusters associated with transcription factors
+tf_annotated <- left_join(markers, 
+          annotated_tfs, by = c("gene" = "SYMBOL")) 
+
+tf_info <- tf_annotated %>% 
+  dplyr::filter(entrez_mouse != 0) %>% 
+  dplyr::select(p_val:gene, gene_name) 
+
+clusters <- unique(tf_info$cluster)
+
+# set gene and gene_name cols to Text to avoid renaming to dates
+per_cluster <- map(split(tf_info, tf_info$cluster),
+    ~set_xlsx_class(.x, 
+                    c("gene_name", "gene"), 
+                    "Text"))
+
+# set numbers to scientific for pvals
+per_cluster <- map(per_cluster,
+    ~set_xlsx_class(.x, 
+                    "p_val", 
+                    "Scientific"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Transcription factors downregulated between transitioning cell types identified in Injured AEC2 and all other injured AEC2. Transcription factors were identified from the TFCheckpoint database.",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene",
+  "gene_description"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name",
+  "description of each gene"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+# each element of named lists will become a seperate sheet
+openxlsx::write.xlsx(c(readme_sheet, per_cluster), 
+                     file.path("markers",                                  "transcription_factors_per_td_injured_clusters_downregulated_012519.xlsx"))
+
+```
+## Find Cell Surface Markers {.tabset .tabset-fade}
+
+  To identify FACS sortable markers of each cell type cell surface proteins will be identified that are enriched in each cell type. A database of known cell surface proteins derived from mass spec data was queried (taken from this [paper](http://journals.plos.org/plosone/article?id=10.1371/journal.pone.0121314) in Plos One) to select cell surface markers. Additionally, the  [UniProt](http://www.uniprot.org/uniprot/?query=locations%3A(location%3A%22cell%20membrane%22)%20AND%20organism%3A%22Mus%20musculus%20(Mouse)%20%5B10090%5D%22%20AND%20annotation%3A(type%3Atransmem)&sort=score&columns=id%2Centry%20name%2Creviewed%2Cprotein%20names%2Corganism%2Clength%2Cgenes(PREFERRED))  database was queried to extract putative cell surface proteins. Shown below are the cell surface proteins found in each cluster ranked by enrichment in the cluster. 
+  
+  The `CSPA category` is a category that is either `high confidence`, `putative` or `unspecific`. If the cell surface marker was not found in the CSPA database, but present in the Uniprot database, then it will not have a CSPA category entry.
+ 
+```{r, eval = F}
+# url to download uniprot catagories
+"http://www.uniprot.org/uniprot/?query=locations%3A(location%3A%22cell%20membrane%22)%20AND%20organism%3A%22Mus%20musculus%20(Mouse)%20%5B10090%5D%22%20AND%20annotation%3A(type%3Atransmem)&sort=score&columns=id%2Centry%20name%2Creviewed%2Cprotein%20names%2Corganism%2Clength%2Cgenes(PREFERRED)"
+
+# search terms
+#locations:(location:"cell membrane") annotation:(type:transmem) AND organism:"Mus musculus (Mouse) [10090]"
+
+# dl date = 05/20/18
+```
+
+```{r}
+csm_file <- file.path("extdata", "S2_File.xlsx")
+if(!file.exists(csm_file)){
+  download.file("http://wlab.ethz.ch/cspa/data/S2_File.xlsx", 
+                csm_file)
+}
+
+cell_surface_markers <- readxl::read_excel(csm_file, 
+                                           sheet = 2)
+
+uni <- suppressMessages(read_tsv(file.path("extdata", "uniprot.tsv.gz")))
+
+filter_cell_surface <- function(df, cell_surface_markers, uniprot) {
+  # annotate with CSPA database and uniprot databse
+  
+  left_join(df, 
+            uniprot,
+            by = c("gene" = "Gene names  (primary )")) %>% 
+    dplyr::select(-(Entry:Status), -(Organism:Length)) %>% 
+    dplyr::mutate(Uniprot_tm = ifelse(is.na(`Protein names`), 
+                                      NA,
+                                      "yes")) -> uni_annotated
+  
+  left_join(uni_annotated, 
+            cell_surface_markers, 
+            by = c("gene" = "ENTREZ gene symbol")) -> cf_annotated
+  
+  dplyr::mutate(cf_annotated,
+                `UniProt cell surface` = ifelse(!is.na(Uniprot_tm),
+                                                "yes",
+                                                `UniProt cell surface`),
+                `UP_Protein_name` = ifelse(!is.na(`Protein names`),
+                                                `Protein names`,
+                                                `UP_Protein_name`)) -> cf_annotated
+  
+  cf_annotated <- dplyr::select(cf_annotated, 
+                                -(`Protein names`:Uniprot_tm))
+  dplyr::filter(cf_annotated,
+                !is.na(`CSPA category`) | !is.na(`UniProt cell surface`)) %>% 
+    dplyr::select(-organism, 
+                  -ID_link,
+                  -UP_entry_name,
+                  -(ENTREZ_gene_ID:`Phobius TM predicted yes/no`)) -> res
+  
+  #remove redundant annotatiosn due to multiple gene descriptions
+  grp_cols <- colnames(res)
+  grp_cols <- grp_cols[grp_cols != "UP_Protein_name"]
+  group_by_at(res, grp_cols) %>% 
+    summarize(UP_Protein_name = dplyr::first(UP_Protein_name)) %>% 
+    arrange(p_val) %>% 
+    ungroup()
+}
+
+
+markers <- read_tsv(file.path("markers", 
+                              "td_injured_markers_wilcox.txt")) 
+
+filter_cell_surface(markers, 
+          cell_surface_markers, 
+          uni) -> cf_annotated
+
+```
+
+```{r write_cfs_xlsx}
+# set gene and gene_name cols to Text to avoid renaming to dates
+per_cluster <- map(split(cf_annotated, cf_annotated$cluster),
+    ~set_xlsx_class(.x, 
+                    c("UP_Protein_name", "gene"), 
+                    "Text"))
+
+# set numbers to scientific for pvals
+per_cluster <- map(per_cluster,
+    ~set_xlsx_class(.x, 
+                    "p_val", 
+                    "Scientific"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Cell surface genes differentially expressed between transitioning cell types identified in Injured AEC2 and all other injured AEC2",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene",
+  "CSPA Category",
+  "CD",
+  "# predicted TM domains",
+  "GPI",
+  "Uniprot cell surface",
+  "UP_Protein_Name"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name",
+  "CSPA confidence class based on mass spec data",
+  "CD annotation if it exists",
+  "# of TMs",
+  "GPI-linked protein",
+  "Uniprot annotated as cell surface",
+  "description of each gene"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+# each element of named lists will become a seperate sheet
+openxlsx::write.xlsx(c(readme_sheet, 
+                     per_cluster), 
+                     file.path("markers", "cell_surface_markers_per_td_injured_clusters.xlsx"))
+```
+
+#### Surface Proteins enriched in `r clusters[1]`
+```{r}
+dplyr::filter(cf_annotated, cluster == clusters[1]) %>% 
+    as.data.frame()
+```
+
+#### Surface Proteins enriched in `r clusters[2]`
+```{r}
+dplyr::filter(cf_annotated, cluster == clusters[2]) %>% 
+    as.data.frame()
+```
+
+#### Surface Proteins enriched in `r clusters[3]`
+```{r}
+dplyr::filter(cf_annotated, cluster == clusters[3]) %>% 
+    as.data.frame()
+```
+
+#### Surface Proteins enriched in `r clusters[4]`
+```{r}
+dplyr::filter(cf_annotated, cluster == clusters[4]) %>% 
+    as.data.frame()
+```
+
+## Find motility related genes  {.tabset .tabset-fade}
+
+The genes associated with the following go-terms will be identified in the TD and injured clusters.
+
+1. GO:0048870 cell motility
+1. GO:0016477 cell migration  
+1. GO:0005925 focal adhesion  
+1. GO:0030054 cell junction  
+1. GO:0031589 cell substrate adhesion  
+
+
+```{r, pulldowngoids}
+
+motility_genes <- file.path("extdata","motility_related_genes.xlsx")
+
+if(!file.exists(motility_genes)){
+  library(biomaRt)
+  ensembl = useMart("ensembl", dataset = "mmusculus_gene_ensembl") #uses mouse ensembl annotations
+  
+  # GO:0048870 cell motility
+  # GO:0016477 cell migration
+  # GO:0005925 focal adhesion
+  # GO:0030054 cell junction
+  # GO:0031589 cell substrate adhesion
+  
+  goids <- c('GO:0048870', 
+             'GO:0016477', 
+             'GO:0005925', 
+             'GO:0030054',
+             'GO:0031589')
+  go_genes <- getBM(attributes = c('external_gene_name', 'description'),
+                     filters = 'go', 
+                    values = goids, mart = ensembl) %>% 
+    as_data_frame()
+  
+  class(go_genes$external_gene_name) <- "Text"
+  openxlsx::write.xlsx(go_genes, motility_genes)
+}
+```
+
+```{r find_enriched_genes}
+
+go_genes <- readxl::read_excel(motility_genes)
+motile_genes <- inner_join(markers,
+           go_genes, 
+           by = c("gene" =
+                    "external_gene_name"))
+
+```
+
+```{r write_out}
+# set gene and gene_name cols to Text to avoid renaming to dates
+per_cluster <- map(split(motile_genes, motile_genes$cluster),
+    ~set_xlsx_class(.x, 
+                    c("gene"), 
+                    "Text"))
+
+# set numbers to scientific for pvals
+per_cluster <- map(per_cluster,
+    ~set_xlsx_class(.x, 
+                    "p_val", 
+                    "Scientific"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Cell motility related genes differentially expressed between transitioning cell types identified in Injured AEC2 and all other injured AEC2",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene",
+  "desription"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name",
+  "description of each gene"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+# each element of named lists will become a seperate sheet
+openxlsx::write.xlsx(c(readme_sheet, per_cluster), 
+                     file.path("markers", 
+                               "cell_motility_genes_per_td_injured_clusters.xlsx"))
+
+```
+
+#### Motility genes enriched in `r clusters[1]`
+```{r}
+dplyr::filter(motile_genes, cluster == clusters[1]) %>% 
+    as.data.frame()
+```
+
+#### Motility genes enriched in `r clusters[2]`
+```{r}
+dplyr::filter(motile_genes, cluster == clusters[2]) %>% 
+    as.data.frame()
+```
+
+#### Motility genes enriched in `r clusters[3]`
+```{r}
+dplyr::filter(motile_genes, cluster == clusters[3]) %>% 
+    as.data.frame()
+```
+
+#### Motility genes enriched in `r clusters[4]`
+```{r}
+dplyr::filter(motile_genes, cluster == clusters[4]) %>% 
+    as.data.frame()
+```
+
+
+
+## Session info
+```{r}
+sessionInfo()
+```

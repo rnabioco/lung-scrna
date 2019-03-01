@@ -1,0 +1,135 @@
+---
+title: "cellbrowser"
+author: "Kent Riemondy RBI"
+date: "2/27/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Cellbrowser
+
+Format seurat object into a cellbrowser directory suitable for html browser. 
+
+```{r}
+library(tidyverse)
+atcells <- readRDS("preprocess/s_obj_final.rds")
+```
+
+### Metadata
+
+```{r add_mdata}
+
+mdata <- atcells@meta.data
+new_mdata <- tibble::rownames_to_column(mdata, "cell") %>% 
+  dplyr::mutate(sample_type = ifelse(str_detect(new_expt_id, 
+                                                 "Non-ATII epithelial"),
+                                            "Naive Non-AEC2 Epithelial",
+                                            ifelse(str_detect(new_expt_id,
+                                                              "ATII expt"),
+                                                   "Naive AEC2",
+                                                   "Injured AEC2")),
+               experiment = ifelse(expt == "expt1", 
+                                   "Experiment 1",
+                                   "Experiment 2")) %>% 
+  dplyr::select(cell, sample_type, experiment) %>% 
+  tibble::column_to_rownames("cell")
+
+atcells <- AddMetaData(atcells, new_mdata)
+
+
+atcells <- AddMetaData(atcells, 
+                       data.frame(row.names = rownames(atcells@meta.data),
+                                  technical_replicate = str_match(atcells@meta.data$sample_names, "([0-9])expt")[, 2]))
+                        
+atcells <- AddMetaData(atcells,
+                       data.frame(row.names = rownames(atcells@meta.data),
+                                  experiment_and_tech_rep = str_c(atcells@meta.data$experiment,
+                                  ": Technical Replicate ",
+                                  atcells@meta.data$technical_replicate)))
+
+```
+
+Add pretty labels to cell annotations
+
+```{r pretty_labels}
+cell_id_relabel <- c("Endothelial" = "Endothelial/Fibroblast",
+  "Basal" = "Basal",
+  "Club" = "Club",
+  "Ciliary" = "Ciliated",
+  "Naive Type I" = "Naive AEC1",
+  "Macrophages" = "Macrophage",
+  "Injured Type II" = "Other Injured AEC2",
+  "Proliferating Type II" = "Injured AEC2: Proliferating",
+  "Cell Cycle Arrest Type II" = "Injured AEC2: Cell Cycle Arrest",
+  "Transdifferentiating Type II" = "Injured AEC2: Transdifferentiating",
+  "Naive Type II" = "Naive AEC2")
+
+
+m_df <- data.frame(row.names = rownames(atcells@meta.data),
+                       pretty_cell_labels = cell_id_relabel[atcells@meta.data$labeled_clusters])
+
+m_df$pretty_cell_labels <- factor(m_df$pretty_cell_labels,
+                                  levels = cell_id_relabel)
+
+atcells <- AddMetaData(atcells, m_df)
+```
+
+
+Simplify object metadata to make interpretable
+
+```{r}
+
+cols <- colnames(atcells@meta.data)
+
+cols_to_keep <- c(
+  `genes per cell` = "nGene",
+  `UMIs per cell` = "nUMI",
+  `condition` = "sample_type",
+  `technical_replicate` = "technical_replicate",
+  `GFP expression` = "gfp_counts", 
+  `proporition of UMIs as mitochondria` = "proportion.mito",
+  `clusters` = "res.0.6",
+  `cell_types` = "pretty_cell_labels")
+
+
+atcells@meta.data <- atcells@meta.data[, cols_to_keep]
+
+colnames(atcells@meta.data) <- names(cols_to_keep)
+```
+
+
+
+```{r}
+
+outdir <- "cellbrowser"
+dir.create(outdir)
+
+saveRDS(atcells, "cellbrowser/sobj.rds")
+```
+
+Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html])
+
+Use bash to run this for now, but might be able to use `reticulate` R package to communicate with the python package.
+
+```{bash}
+cd cellbrowser
+/miniconda3/bin/cbImportSeurat2 \
+  -i sobj.rds \
+  -o Lung_Regeneration_LPS \
+  -m \
+  -c "cell_types" 
+
+```
+
+
+```{bash}
+cd cellbrowser
+
+/miniconda3/bin/cbBuild \
+ -i Lung_Regeneration_LPS/cellbrowser.conf \
+ -o lung
+
+```

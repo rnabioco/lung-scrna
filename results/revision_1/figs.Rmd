@@ -1,0 +1,2428 @@
+---
+title: "Figures"
+author: "Kent Riemondy RBI"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+data_dir <- file.path(data_dir, "updated")
+```
+
+
+## Figure 1 code 
+  
+Load in original seurat object with proper filtered data. 
+
+```{r load_dat}
+atcells <- readRDS("s_obj2.rds")
+atcells <- SetAllIdent(atcells, "res.1.6")
+```
+
+```{r write_out_expression}
+
+if (!file.exists("count_matrix/expr_matrix.tsv.gz")) {
+  mat <- as.data.frame(as.matrix(atcells@data))
+  mat <- tibble::rownames_to_column(mat, "gene")
+  write_tsv(mat, "count_matrix/expr_matrix.tsv") 
+  R.utils::gzip("count_matrix/expr_matrix.tsv", 
+                overwrite = T)
+  rm(mat)
+}
+```
+
+```{r add_mdata}
+
+mdata <- atcells@meta.data
+new_mdata <- tibble::rownames_to_column(mdata, "cell") %>% 
+  dplyr::mutate(sample_type = ifelse(str_detect(new_expt_id, 
+                                                 "Non-ATII epithelial"),
+                                            "Naive Non-AT-II Epithelial",
+                                            ifelse(str_detect(new_expt_id,
+                                                              "ATII expt"),
+                                                   "Naive AT-II",
+                                                   "Injured AT-II")),
+               experiment = ifelse(expt == "expt1", 
+                                   "Experiment 1",
+                                   "Experiment 2")) %>% 
+  dplyr::select(cell, sample_type, experiment) %>% 
+  tibble::column_to_rownames("cell")
+
+atcells <- AddMetaData(atcells, new_mdata)
+
+```
+### Process unfiltered data
+ 
+  Loading and filtering code largely reproduced from [filtering RMarkdown](preprocess.Rmd). From now on the replicate cell samples (i.e. ATI1expt1 and ATI2expt1) will be presented as 1 sample (AT1expt1).
+
+
+```{r fig1_simple_summaries}
+dir.create(file.path("fig1", "unfiltered"), recursive = TRUE, showWarnings = FALSE)
+## simple summaries
+merge_samples <- tibble::tribble(
+  ~expt_id, ~new_expt_id,
+  "ATI1expt1", "Non-ATII epithelial expt.1",
+  "ATI1expt2", "Non-ATII epithelial expt.2",
+  "ATI2expt1", "Non-ATII epithelial expt.1",
+  "ATI2expt2", "Non-ATII epithelial expt.2",
+  "ATII1expt1", "ATII expt.1", 
+  "ATII1expt2", "ATII expt.2", 
+  "ATIIinjured1expt1", "ATII-injured expt.1", 
+  "ATIIinjured1expt2", "ATII-injured expt.2", 
+  "ATIIinjured2expt1", "ATII-injured expt.1", 
+  "ATIIinjured2expt2", "ATII-injured expt.2"
+)
+
+summary_dat <- data_frame(cell = colnames(atcells@raw.data),
+                          expt_id = str_split(colnames(atcells@raw.data),
+                                                    "_", simplify = T) %>% .[, 1], 
+                          nUMIs = colSums(as.matrix(atcells@raw.data)),
+                          nGenes = colSums(as.matrix(atcells@raw.data) > 0))
+summary_dat <- left_join(summary_dat, 
+                         merge_samples, by = "expt_id")
+summary_dat <- summary_dat %>% 
+  group_by(new_expt_id) %>% 
+  dplyr::arrange(desc(nUMIs))
+
+n_cells <- summary_dat %>%  
+  group_by(new_expt_id) %>%  
+  summarize(n_cells = n(),
+            median_UMIs = median(nUMIs),
+            median_Genes = median(nGenes))
+
+n_cell_plt <- ggplot(n_cells, 
+            aes(new_expt_id, n_cells)) +
+  geom_bar(aes(fill = new_expt_id), stat = "identity") + 
+  scale_fill_viridis(discrete = T) +
+  labs(y = "Number of Cells") +
+  theme(legend.pos = "none",
+        axis.text.x = element_text(angle = 90, 
+                                     hjust = 1, 
+                                     vjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10))
+
+n_umi_plt <- plot_violin(summary_dat, 
+            "new_expt_id", "nUMIs", 
+            .fill = "new_expt_id") + 
+  labs(y = "Number of UMIs") +
+  theme(axis.title.x = element_blank(),
+        legend.pos = "none",
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10))
+
+n_gene_plot <- plot_violin(summary_dat, 
+            "new_expt_id", "nGenes", 
+            .fill = "new_expt_id") + 
+  labs(y = "Number of Genes\n(at least 1 UMI)") +
+  theme(axis.title.x = element_blank(),
+        legend.pos = "none",
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10))
+
+save_plot(file.path("fig1", "unfiltered", "numis.pdf"), n_umi_plt,
+          base_height = 4, 
+          base_aspect_ratio = .9)
+
+save_plot(file.path("fig1", "unfiltered", "ngenes.pdf"), n_gene_plot,
+          base_height = 4, 
+          base_aspect_ratio = .9)
+
+save_plot(file.path("fig1", "unfiltered", "ncells.pdf"), n_cell_plt, 
+          base_height = 4, 
+          base_aspect_ratio = .9)
+```
+
+```{r n_mito}
+mito.genes <- grep("^mt-", rownames(atcells@raw.data), value = T)
+proportion.mito <- Matrix::colSums(atcells@raw.data[mito.genes, ]) /
+  Matrix::colSums(atcells@raw.data)
+
+unfiltered <- data_frame(cell = colnames(atcells@raw.data),
+                         proportion.mito) %>% 
+  left_join(summary_dat, by = c("cell")) %>% 
+  as_data_frame()
+
+
+n_mito_plot <- plot_violin(unfiltered, 
+            "new_expt_id", "proportion.mito", 
+            .fill = "new_expt_id") + 
+  labs(y = "Proportion of reads\nderived from mitochondria") +
+  theme(axis.title.x = element_blank(),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        legend.pos = "none")
+
+save_plot(file.path("fig1", "unfiltered", "nmito.pdf"), n_mito_plot, 
+          base_height = 4, 
+          base_aspect_ratio = .9)
+```
+
+```{r n_mito_vs_umis}
+
+n_mito_umi_plot <- ggplot(unfiltered, 
+       aes(nUMIs, proportion.mito)) + 
+  geom_point(aes(color = new_expt_id), 
+             size = 0.25) +
+  labs(x = "UMIs per cell",
+       y = "Proportion of reads\nderived from mitochondria") +
+  scale_color_viridis(discrete = TRUE, alpha = 0.33, name = "") +
+  guides(colour = guide_legend(override.aes = list(size = 2))) +
+  theme(legend.pos = c(0.05, 0.80),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        legend.text = element_text(size = 8))
+
+save_plot(file.path("fig1", "unfiltered", "nmito_umi.pdf"), n_mito_umi_plot, 
+          base_height = 4, 
+          base_aspect_ratio = 1.1)
+
+n_mito_umi_plot_zoom <- ggplot(unfiltered, 
+       aes(nUMIs, proportion.mito)) + 
+  geom_point(aes(color = new_expt_id), 
+             size = 0.25) +
+  coord_cartesian(xlim = c(0, 45000), ylim = c(0, 0.05)) + 
+  labs(x = "UMIs per cell",
+       y = "Proportion of reads\nderived from mitochondria") +
+  scale_color_viridis(discrete = TRUE, alpha = 0.33, name = "") +
+  guides(colour = guide_legend(override.aes = list(size = 2))) +
+  theme(legend.pos = "top",
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        legend.text = element_text(size = 8))
+
+save_plot(file.path("fig1", 
+                    "unfiltered", 
+                    "zoom_nmito_umi.pdf"), n_mito_umi_plot_zoom, 
+          base_height = 4, 
+          base_aspect_ratio = 1.1)
+```
+
+```{r gfp_counts_2, message = F, eval = T}
+
+expt1_files <- dir(file.path(data_dir, "20170623_zeemans"),
+    pattern = "*_sorted_counts.txt", full.names = T, recursive = T)
+expt2_files <- dir(file.path(data_dir, "20170728_zeeman_expt2"),
+    pattern = "*_sorted_counts.txt", full.names = T, recursive = T)
+
+
+files <- c(expt1_files, expt2_files)
+
+samples <- c(
+  "3161-ATII-1",
+  "3161-ATII-2",
+  "3161-ATII-3",
+  "3162-ATII-5",
+  "3162-ATTII-4")
+
+sample_paths_exp1 <- file.path(data_dir,
+                               "20170623_zeemans", 
+                               samples,
+                               "outs", "filtered_gene_bc_matrices", "mm10")
+
+expt_names <- c("ATI1expt1", "ATI2expt1", 
+                "ATII1expt1", "ATIIinjured2expt1", "ATIIinjured1expt1",
+                "ATIIinjured1expt2", "ATIIinjured2expt2", 
+                "ATI1expt2", "ATI2expt2", "ATII1expt2")
+
+dat <- map(files, read_tsv, col_names = c("cells", "gfp_counts"))
+
+dat <- map2(dat, expt_names, ~dplyr::mutate(.x, group = .y))
+
+dat <- bind_rows(dat) 
+
+dat <- dplyr::mutate(dat, 
+              cells = str_split(cells, "-", simplify = T)[, 1],
+              cells = paste( group, cells, sep = "_" )) %>% 
+  dplyr::select(-group)
+
+# only keep filtered cells
+dat <- dat %>% dplyr::filter(cells %in% atcells@cell.names)
+# add in not-detected cells
+dat <- left_join(data_frame(cells = atcells@cell.names), 
+                 dat, by = c("cells"))
+
+dat[is.na(dat)] <- 0
+dat <- as.data.frame(dat)
+
+rownames(dat) <- dat[, 1]
+dat[, 1] <- NULL
+
+# log Normalize
+dat <- as.data.frame(as.matrix(LogNormalize(dat) ))
+
+
+# extract out for plotting
+unfiltered <- dat %>% 
+  tibble::rownames_to_column("cell") %>% 
+  left_join(summary_dat, by = c("cell")) %>% 
+  as_data_frame()
+
+n_gfp_plot <- plot_violin(unfiltered, 
+            "new_expt_id", "gfp_counts", 
+            .fill = "new_expt_id", jitter = F) + 
+  labs(y = "GFP expression") +
+  theme(axis.title.x = element_blank(),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        legend.pos = "none")
+
+save_plot(file.path("fig1", "unfiltered", "ngfp.pdf"), n_gfp_plot, 
+           base_height = 3, 
+          base_aspect_ratio = .9)
+```
+
+
+```{r single_page_fig}
+plts <- list(
+  n_cell_plt,
+  n_gene_plot,
+  n_umi_plt,
+  n_mito_plot,
+  n_gfp_plot,
+  n_mito_umi_plot
+)
+
+plt_top <- plot_grid(plotlist = plts[1:6],
+          nrow = 3,
+          ncol = 3,
+         # align = 'hv',
+          axis = "tl")
+
+
+plt <- plot_grid(plt_top, plts[[6]], 
+                 nrow = 2, ncol = 1,
+                 rel_heights = c(1.5, 1))
+
+save_plot(file.path("fig1", "unfiltered", "unfiltered_combined.pdf"), 
+          plt_top, base_width = 8, base_height = 11)
+```
+
+### Process filtered data
+
+```{r}
+atcells <- readRDS("s_obj2.rds")
+atcells <- SetAllIdent(atcells, "res.1.6")
+```
+
+
+```{r fig1_other_summaries}
+dir.create(file.path("fig1", "filtered"), recursive = TRUE, showWarnings = FALSE)
+## simple summaries
+
+summary_dat <- atcells@meta.data 
+
+n_cell_plt <- ggplot(n_cells, 
+            aes(new_expt_id, n_cells)) +
+  geom_bar(aes(fill = new_expt_id), stat = "identity") + 
+  scale_fill_viridis(discrete = T) +
+  labs(y = "Number of Cells") +
+  theme(legend.pos = "none",
+        axis.text.x = element_text(angle = 90, 
+                                     hjust = 1, 
+                                     vjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10))
+
+n_umi_plt <- plot_violin(summary_dat, 
+            "new_expt_id", "nUMI", 
+            .fill = "new_expt_id") + 
+  labs(y = "Number of UMIs") +
+  theme(axis.title.x = element_blank(),
+        legend.pos = "none",
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10))
+
+n_gene_plot <- plot_violin(summary_dat, 
+            "new_expt_id", "nGene", 
+            .fill = "new_expt_id") + 
+  labs(y = "Number of Genes\n(at least 1 UMI)") +
+  theme(axis.title.x = element_blank(),
+        legend.pos = "none",
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10))
+
+save_plot(file.path("fig1", "filtered", "numis.pdf"), n_umi_plt,
+          base_height = 4, 
+          base_aspect_ratio = .9)
+
+save_plot(file.path("fig1", "filtered", "ngenes.pdf"), n_gene_plot,
+          base_height = 4, 
+          base_aspect_ratio = .9)
+
+save_plot(file.path("fig1", "filtered", "ncells.pdf"), n_cell_plt, 
+          base_height = 4, 
+          base_aspect_ratio = .9)
+```
+
+```{r n_mito_prop}
+
+
+n_mito_plot <- plot_violin(summary_dat, 
+            "new_expt_id", "proportion.mito", 
+            .fill = "new_expt_id") + 
+  labs(y = "Proportion of reads\nderived from mitochondria") +
+  theme(axis.title.x = element_blank(),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        legend.pos = "none")
+
+save_plot(file.path("fig1", "filtered", "nmito.pdf"), n_mito_plot, 
+          base_height = 4, 
+          base_aspect_ratio = .9)
+```
+
+```{r n_mito_vs_umis_filter}
+
+n_mito_umi_plot <- ggplot(summary_dat, 
+       aes(nUMI, proportion.mito)) + 
+  geom_point(aes(color = new_expt_id), 
+             size = 0.25) +
+  labs(x = "UMIs per cell",
+       y = "Proportion of reads\nderived from mitochondria") +
+  scale_color_viridis(discrete = TRUE, alpha = 0.33, name = "") +
+  guides(colour = guide_legend(ncol = 1, override.aes = list(size = 2))) +
+  theme(legend.pos = "top",
+        axis.text = element_text(size = 10),
+        axis.text.x = element_text(size = 8),
+        axis.title = element_text(size = 10),
+        legend.text = element_text(size = 6))
+
+save_plot(file.path("fig1", "filtered", "nmito_umi.pdf"), n_mito_umi_plot, 
+          base_height = 4, 
+          base_aspect_ratio = 1.1)
+
+```
+
+```{r gfp_counts, message = F, eval = T}
+
+n_gfp_plot <- plot_violin(summary_dat, 
+            "new_expt_id", "gfp_counts", 
+            .fill = "new_expt_id") + 
+  labs(y = "GFP expression") +
+  theme(axis.title.x = element_blank(),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        legend.pos = "none")
+
+save_plot(file.path("fig1", "filtered", "ngfp.pdf"), n_gfp_plot, 
+           base_height = 4, 
+          base_aspect_ratio = .9)
+```
+
+
+```{r single_page_fig2}
+plts <- list(
+  n_cell_plt,
+  n_gene_plot,
+  n_umi_plt,
+  n_mito_plot,
+  n_gfp_plot,
+  n_mito_umi_plot
+)
+
+plt_top <- plot_grid(plotlist = plts[1:6],
+          nrow = 3,
+          ncol = 3,
+         # align = 'hv',
+          axis = "tl")
+
+
+plt <- plot_grid(plt_top, plts[[6]], 
+                 nrow = 2, ncol = 1,
+                 rel_heights = c(1.5, 1))
+
+save_plot(file.path("fig1", "filtered", "filtered_combined.pdf"), 
+          plt_top, base_width = 8, base_height = 11)
+```
+
+## Figure 2 code
+
+### By experiments
+
+```{r tsnes}
+dir.create("fig2", recursive = TRUE, showWarnings = FALSE)
+
+#tsne_col_pal <- brewer.pal(6, sa"Paired")
+#tsne_col_pal <- rev(viridis(6))
+ #1,2
+tsne_col_pal <- brewer.pal(11, "Paired")
+
+sample_tsne <- plot_tsne(atcells, 
+                         ident = "new_expt_id",
+                         pt.alpha = 0.50,
+                         .cols = tsne_col_pal) 
+
+save_plot(file.path("fig2", "tsne_samples_per_expt.pdf"), sample_tsne, 
+           base_height = 4, 
+           base_aspect_ratio = 1.66)
+```
+
+#### all expts
+```{r tsne_by_expt}
+dir.create(file.path("fig2", "tsne_per_expt"))
+
+expt1 <- rownames(atcells@meta.data)[atcells@meta.data$expt == "expt1"]
+expt2 <- rownames(atcells@meta.data)[atcells@meta.data$expt == "expt2"]
+
+plot_expt_tsnes(atcells)
+
+expt1 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "ATII expt.1"]
+expt2 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "ATII expt.2" ]
+
+plot_expt_tsnes(atcells,
+                expt1_cells = expt1,
+                expt2_cells = expt2,
+                expt1_name = "naive-ATII\nexpt.1",
+                expt2_name = "naive-ATII\nexpt.2",
+                out_name = "naive_type_ii",
+                tsne_cols = tsne_col_pal[c(1, 2)])
+                          
+#### naive type i
+
+expt1 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "Non-ATII epithelial expt.1"]
+expt2 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "Non-ATII epithelial expt.2" ]
+plot_expt_tsnes(atcells,
+                expt1_cells = expt1,
+                expt2_cells = expt2,
+                expt1_name = "naive-ATI\nexpt.1",
+                expt2_name = "naive-ATI\nexpt.2",
+                out_name = "naive_type_i",
+                tsne_cols = tsne_col_pal[c(1, 2)])
+
+#### naive type ii injured
+
+expt1 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "ATII-injured expt.1"]
+expt2 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "ATII-injured expt.2" ]
+
+plot_expt_tsnes(atcells,
+                expt1_cells = expt1,
+                expt2_cells = expt2,
+                expt1_name = "ATII-injured expt.1",
+                expt2_name = "ATII-injured expt.2",
+                out_name = "injured_type_ii",
+                tsne_cols = tsne_col_pal[c(1, 2)])
+```
+
+#### all expts split out technical replicates
+```{r tsne_by_expt_tech_reps}
+
+atcells <- AddMetaData(atcells, 
+                       data.frame(row.names = rownames(atcells@meta.data),
+                                  technical_replicate = str_match(atcells@meta.data$sample_names, "([0-9])expt")[, 2]))
+                        
+atcells <- AddMetaData(atcells,
+                       data.frame(row.names = rownames(atcells@meta.data),
+                                  experiment_and_tech_rep = str_c(atcells@meta.data$experiment,
+                                  ": Technical Replicate ",
+                                  atcells@meta.data$technical_replicate)))
+
+dir.create(file.path("fig2", "tsne_per_expt", "technical_replicates"))
+
+expt1 <- rownames(atcells@meta.data)[atcells@meta.data$expt == "expt1"]
+expt2 <- rownames(atcells@meta.data)[atcells@meta.data$expt == "expt2"]
+
+plt <- plot_expt_tech_tsnes(atcells, save_plots = F)
+save_plot(file.path("fig2", 
+                    "tsne_per_expt",
+                    "technical_replicates", "legend.pdf"), get_legend(plt))
+
+plot_expt_tech_tsnes(atcells, save_plots = T)
+
+expt1 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "ATII expt.1"]
+expt2 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "ATII expt.2" ]
+
+plot_expt_tech_tsnes(atcells,
+                expt1_cells = expt1,
+                expt2_cells = expt2,
+                out_name = "naive_type_ii",
+                combined_cols = brewer.pal(4, "Set1")[c(3, 1)])
+                          
+#### naive type i
+
+expt1 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "Non-ATII epithelial expt.1"]
+expt2 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "Non-ATII epithelial expt.2" ]
+plot_expt_tech_tsnes(atcells,
+                expt1_cells = expt1,
+                expt2_cells = expt2,
+                expt1_name = "naive-ATI\nexpt.1",
+                expt2_name = "naive-ATI\nexpt.2",
+                out_name = "naive_type_i")
+
+#### naive type ii injured
+
+expt1 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "ATII-injured expt.1"]
+expt2 <- rownames(atcells@meta.data)[atcells@meta.data$new_expt_id == "ATII-injured expt.2" ]
+
+plot_expt_tech_tsnes(atcells,
+                expt1_cells = expt1,
+                expt2_cells = expt2,
+                expt1_name = "ATII-injured expt.1",
+                expt2_name = "ATII-injured expt.2",
+                out_name = "injured_type_ii")
+
+
+## readme
+write_lines(c("tsnes are colored to show each technical replicate", 
+              "the first column is the first experiment",
+              "the second column is the second experiment",
+              "the third column is combined",
+              "the legend.pdf contains the legend"),
+            file.path("fig2", "tsne_per_expt","technical_replicates", "README.txt"))
+
+```
+
+
+### By sample type
+
+Group each experiment together and plot naive non-atii epithelial, naive at II, injured at II, and all
+
+```{r by_sample_grouped, fig.width = 12}
+
+
+mdata <- atcells@meta.data
+
+naive_non_atii_epi <- rownames(mdata)[mdata$sample_type == "Naive Non-AT-II Epithelial"]
+naive_atii <- rownames(mdata)[mdata$sample_type == "Naive AT-II"]
+injured_atii <- rownames(mdata)[mdata$sample_type =="Injured AT-II"]
+
+cols <- brewer.pal(3, "Set1")
+plt <- plot_tsne(atcells, ident = "sample_type",
+               .cols = rev(cols)[1:2], pt.alpha = 0.50, 
+               cell_filter = c(naive_non_atii_epi,
+          naive_atii)) + 
+  theme(legend.pos = "top")
+
+save_plot(file.path("fig2","tsne_naive_only.pdf"), plt, 
+          base_height = 6, base_aspect_ratio = 1.33)
+
+plts <- map2(list(naive_non_atii_epi,
+          naive_atii,
+          injured_atii),
+     rev(cols),
+     ~plot_tsne(atcells, ident = "sample_type", cell_filter = .x, 
+               .cols = .y, pt.alpha = 0.50) + theme(legend.pos = "top"))
+
+plts[[length(plts) + 1]] <- plot_tsne(atcells, ident = "sample_type", 
+               .cols = cols, pt.alpha = 0.50) + theme(legend.pos = "top")
+
+plt <- plot_grid(plotlist = plts, nrow = 1)
+save_plot(file.path("fig2","tsne_per_sampletype.pdf"), plt, 
+                    nrow = 1, base_height = 5.5, base_aspect_ratio = 4)
+
+sample_type_cells <- lst(naive_non_atii_epi,
+          naive_atii,
+          injured_atii)
+
+plts <- pmap(list(sample_type_cells,
+     rev(cols),
+     list(c("Experiment 1",
+       "Experiment 2",
+       "Combined"), rep("", 3), rep("", 3))), 
+     function(.x, .y, .z){
+     expt1 <- rownames(atcells@meta.data)[atcells@meta.data$experiment == "Experiment 1"]
+     expt2 <- rownames(atcells@meta.data)[atcells@meta.data$experiment == "Experiment 2"]
+     
+     expt1 <- intersect(.x, expt1)
+     expt2 <- intersect(.x, expt2)
+     
+     plt_theme <- theme(legend.pos = "none",
+                        axis.line = element_blank(),
+                        axis.title = element_blank(),
+                        axis.text = element_blank(),
+                        axis.ticks = element_blank(),
+                        plot.background = element_rect(colour = "grey", 
+                                                       linetype = "solid", size = 0.5))
+     
+     plt1 <- plot_tsne(atcells, ident = "sample_type", cell_filter = expt1, 
+               .cols = .y, pt.alpha = 0.50) + labs(title = .z[1]) + plt_theme
+     plt2 <- plot_tsne(atcells, ident = "sample_type", cell_filter = expt2, 
+               .cols = .y, pt.alpha = 0.50)  + labs(title = .z[2]) + plt_theme
+     plt3 <- plot_tsne(atcells, ident = "sample_type", cell_filter = .x, 
+               .cols = .y, pt.alpha = 0.50)  + labs(title = .z[3]) + plt_theme
+     plt <- plot_grid(plt1, plt2, plt3, nrow = 1)
+     plt
+})
+
+plt <- plot_grid(plotlist = plts, ncol = 1,  labels = c("Naive Non-AT-II Epithelial",
+                                                        "Naive AT-II",
+                                                        "Injured AT-II"),
+                 label_size = 8, label_x = 0, label_y = 1)
+save_plot(file.path("fig2","tsne_per_sampletype_expt.pdf"), plt, 
+          nrow = 1, base_height = 7, base_aspect_ratio = 1)
+
+
+###### No labels ######
+plts <- pmap(list(sample_type_cells,
+     rev(cols)), 
+     function(.x, .y){
+     expt1 <- rownames(atcells@meta.data)[atcells@meta.data$experiment == "Experiment 1"]
+     expt2 <- rownames(atcells@meta.data)[atcells@meta.data$experiment == "Experiment 2"]
+     
+     expt1 <- intersect(.x, expt1)
+     expt2 <- intersect(.x, expt2)
+     
+     plt_theme <- theme(legend.pos = "none",
+                        axis.line = element_blank(),
+                        axis.title = element_blank(),
+                        axis.text = element_blank(),
+                        axis.ticks = element_blank(),
+                        plot.background = element_rect(colour = "grey", 
+                                                       linetype = "solid", size = 0.5))
+     
+     plt1 <- plot_tsne(atcells, ident = "sample_type", cell_filter = expt1, 
+               .cols = .y, pt.alpha = 0.50) + plt_theme
+     plt2 <- plot_tsne(atcells, ident = "sample_type", cell_filter = expt2, 
+               .cols = .y, pt.alpha = 0.50)   + plt_theme
+     plt3 <- plot_tsne(atcells, ident = "sample_type", cell_filter = .x, 
+               .cols = .y, pt.alpha = 0.50)  + plt_theme
+     
+     plt <- plot_grid(plt1, plt2, plt3, nrow = 1)
+     plt
+})
+
+plt <- plot_grid(plotlist = plts, ncol = 1)
+save_plot(file.path("fig2","tsne_per_sampletype_expt_nolabels.pdf"), plt, 
+          nrow = 1, base_height = 7, base_aspect_ratio = 1)
+```
+
+### Markers
+
+```{r marker_list}
+cell_type_markers <- list(
+  Ciliary = c("Foxj1",
+              "Ccdc39",
+              "Tubb4a",
+              "Ccdc113"),
+  Club = c("Scgb1a1", 
+           "Scgb3a1", 
+           "Scgb3a2", 
+           "Chad"),
+  Basal = c("Krt5", 
+            "Trp63", 
+            "Krt14", 
+            "Krt15"),
+  AEC1 =  c("Pdpn", 
+            "Emp2", 
+            "Hopx", 
+            "Akap5", 
+            "Aqp5", 
+            "Clic5"),
+  AEC2 = c("Sftpc", 
+           "Lamp3", 
+           "Lyz2", 
+           "Abca3", 
+           "Sftpa1"),
+  Mac = c("Ptprc", 
+          "Cd68", 
+          "Siglecf"),
+  Eos = c("Ptprc", 
+          "Fcer1g"),
+  Fibroblasts = c("Col1a1",
+                  "Col3a1",
+                  "Col1a2",
+                  "Vim",
+                  "S100a4"),
+  Endothelial = c("Thbd",
+                  "Vcam1"),
+  Dendritic = c("Itgax",
+                "Ptprc"),
+  Ly6 = c("Cd3e",
+          "Cd4",
+          "Cd8b1",
+          "Cd19",
+          "Ptprc",
+          "Ly6g")
+)
+```
+
+#### ciliary
+
+```{r}
+dir.create(file.path("fig2", "tsne_cell_markers_all_cells"))
+```
+
+```{r ciliary}
+ciliary_markers <- c("Foxj1", 
+             "Ccdc39", 
+             "Tubb4a",
+             "Ccdc113")
+
+plts <- map(ciliary_markers, 
+            ~plot_feature(atcells, 
+                          gene = .x,
+                          pt.alpha = 0.75))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_ciliary.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 2,
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+#### club
+
+```{r club}
+club_markers <- c("Scgb1a1", "Scgb3a1", "Scgb3a2", "Chad")
+
+plts <- map(club_markers, 
+            ~plot_feature(atcells, 
+                          gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_club.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 2, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+
+
+```
+#### basal
+```{r basal}
+basal_markers <- c("Krt5", "Trp63", "Krt14", "Krt15")
+
+plts <- map(basal_markers, 
+            ~plot_feature(atcells, gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_basal.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 2, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+
+#### At1
+```{r at1}
+at1_markers <- c("Pdpn", "Emp2", "Hopx", "Akap5", "Aqp5", "Clic5")
+plts <- map(at1_markers, 
+            ~plot_feature(atcells, gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_at1.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 2, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+
+#### At2
+```{r at2}
+at2_markers <- c("Sftpc", "Lamp3", "Lyz2", "Abca3", "Sftpa1")
+
+plts <- map(at2_markers, 
+            ~plot_feature(atcells, gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_at2.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 2, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+
+#### Macrophages
+```{r macs}
+#ptprc = cd45
+#
+macs_markers <- c("Ptprc", "Cd68", "Siglecf")
+
+plts <- map(macs_markers, 
+            ~plot_feature(atcells, gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_macs.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 2, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+
+#### Eosinophils
+
+```{r eos}
+#ptprc = cd45
+#
+eos_markers <- c("Ptprc", "Fcer1g")
+
+plts <- map(eos_markers, 
+            ~plot_feature(atcells, gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_eosionphils.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 1, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+
+#### fibroblasts
+```{r fibs}
+# fsp1 = s100a4
+fibs_markers <- c("Col1a1", 
+                  "Col3a1",
+                  "Col1a2",
+                  "Vim",
+                  "S100a4")
+
+plts <- map(fibs_markers, 
+            ~plot_feature(atcells, gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_fibroblasts.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 3, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+
+#### endothelial
+
+```{r endos}
+# CD141 = Thbd
+# VCAM = Vcam1
+endos_markers <- c("Thbd", 
+                  "Vcam1")
+
+plts <- map(endos_markers, 
+            ~plot_feature(atcells, gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_endothelial.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 1, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+
+#### dendritic
+
+```{r dend}
+# CD11c = Itgax
+# CD45 = Ptprc
+dend_markers <- c("Itgax", 
+                  "Ptprc")
+
+plts <- map(dend_markers, 
+            ~plot_feature(atcells, gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_dendritic.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 1, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+
+#### ly6
+
+```{r ly6}
+#CD3 = Cd3e
+#CD4 = Cd4
+#CD8 = Cd8a
+#CD19 = Cd19
+#B220 = Ptprc
+#Ly6G = Ly6g
+
+# CD141 = Thbd
+# VCAM = Vcam1
+ly6_markers <- c("Cd3e",
+                 "Cd4",
+                 "Cd8b1",
+                 "Cd19",
+                 "Ptprc",
+                 "Ly6g")
+
+plts <- map(ly6_markers, 
+            ~plot_feature(atcells, gene = .x, pt.alpha = 1))
+
+plt <- plot_grid(plotlist = plts, ncol = 2)
+save_plot(file.path("fig2", "tsne_cell_markers_all_cells", "tsne_ly6g.pdf"),
+          plt,
+          ncol = 2, 
+          nrow = 3, 
+          base_height = 4, 
+          base_aspect_ratio = 1.33)
+```
+
+### by naive type 
+
+#### tsne
+```{r all_cells_by_sample_type}
+dir.create(file.path("fig2", "tsne_naive_by_sample_type"))
+dir.create(file.path("fig2", "tsne_naive_by_sample_type", "tsne_plots"))
+dir.create(file.path("fig2", "tsne_naive_by_sample_type", "tsne_plots", "no_labels"))
+
+write_lines(
+  "tsne_naive_by_sample_type\tTSNE and violin plots split by the naive sample type for each cell\tCd19 was removed as it had no expression",
+  file.path("fig2", "README.txt"), append = F)
+
+cell_markers <- lst(
+  ciliary_markers,
+  club_markers,
+  endos_markers, 
+  fibs_markers, 
+  eos_markers, 
+  macs_markers, 
+  at2_markers, 
+  at1_markers, 
+  basal_markers,
+  dend_markers,
+  ly6_markers
+)
+
+naive_cell_types <- list("naive_non_atii_epi" = sample_type_cells[[1]],
+                         "naive_atii" = sample_type_cells[[2]],
+                         "all_naive" = c(sample_type_cells[[1]],
+                                         sample_type_cells[[2]]))
+
+### with labels
+tsne_plts <- map2(cell_markers,
+     names(cell_markers),
+    function(x, y){
+  plts <- list()
+  plts[[1]] <- tsne_by_sample_type(atcells, 
+                    .gene = x[1],
+                    cell_sets = naive_cell_types,
+                    top_label = names(naive_cell_types))
+  
+  plts_no_label <- map(x[2:length(x)], 
+           ~tsne_by_sample_type(atcells, 
+                    .gene = .x,
+                    cell_sets = naive_cell_types))
+  plt <- plot_grid(plotlist = c(plts, plts_no_label), ncol = 1)
+
+  save_plot(file.path("fig2", 
+                      "tsne_naive_by_sample_type", 
+                      "tsne_plots", 
+                      paste0("tsne_", y, ".pdf")),
+          plt,
+          ncol = 1,
+          nrow = length(x),
+          base_height = 2.75, 
+          base_aspect_ratio = 3)
+  plt
+})
+
+### without labels
+map2(cell_markers,
+     names(cell_markers),
+    function(x, y){
+  plts <- list()
+  plts[[1]] <- tsne_by_sample_type(atcells, 
+                    .gene = x[1],
+                    cell_sets = naive_cell_types)
+
+  plts_no_label <- map(x[2:length(x)], 
+           ~tsne_by_sample_type(atcells, 
+                    .gene = .x,
+                    cell_sets = naive_cell_types))
+       
+  plt <- plot_grid(plotlist = c(plts, plts_no_label), ncol = 1)
+
+  save_plot(file.path("fig2", 
+                      "tsne_naive_by_sample_type", 
+                      "tsne_plots", 
+                      "no_labels", 
+                      paste0("tsne_", y, ".pdf")),
+          plt,
+          ncol = 1,
+          nrow = length(x),
+          base_height = 2.75, 
+          base_aspect_ratio = 3)
+})
+
+```
+
+#### violin plots
+
+```{r}
+# merge populations from naive type ii
+ids_to_merge <- c("Naive Type II",
+                  "Cell Cycle Arrest Type II",
+                  "Injured Type II",
+                  "Transdifferentiating Type II",
+                  "Proliferating Type II")
+
+mdata <- atcells@meta.data[, 
+                           c("labeled_clusters", "sample_type")] %>% 
+  tibble::rownames_to_column("cell") 
+
+mdata <- filter(mdata, cell %in% unique(unlist(naive_cell_types)),
+                !(sample_type == "Naive Non-AT-II Epithelial" &
+                    labeled_clusters %in% ids_to_merge))
+
+mdata <- mutate(mdata,
+                new_id = ifelse(sample_type == "Naive AT-II" & 
+                                  labeled_clusters %in% ids_to_merge,
+                                "Naive AT-II",
+                                 ifelse(labeled_clusters == "Naive Type I",
+                                              "Naive AT-I",
+                                              labeled_clusters)))
+
+dir.create(file.path("fig2", 
+                     "tsne_naive_by_sample_type", 
+                     "violin_plots"))
+imap(cell_markers,
+    function(x, y){
+     plts <- map(x,
+       function(x){
+       dat <- FetchData(atcells, x) %>% 
+         as.data.frame() %>%
+         tibble::rownames_to_column("cell")
+       
+       dat <- inner_join(dat, mdata, by = "cell")
+       max_expr <- max(dat[[x]])
+       p <- plot_violin(dat, "new_id", x, .scale = "count", 
+                   single_col = brewer.pal(11, "RdGy")[7]) 
+       if (max_expr != 0){
+         p <- p + geom_jitter(size = 0.1, alpha = 0.2)
+       }
+       p + theme(axis.title.x = element_blank())
+     })
+    plt <- plot_grid(plotlist = plts, ncol = 1)
+    save_plot(file.path("fig2", 
+                        "tsne_naive_by_sample_type", "violin_plots", 
+                        paste0(y, ".pdf")), 
+              ncol = 1, 
+              nrow = length(x),
+              plt, 
+              base_height = 2.5, 
+              base_aspect_ratio = 1.1)
+ })
+
+
+
+```
+
+```{r per_cell_type}
+non_type2 <- rownames(atcells@meta.data)[str_detect(atcells@meta.data$new_expt_id, 
+                                                    "^Non-ATII epithelial")]
+type2 <- rownames(atcells@meta.data)[str_detect(atcells@meta.data$new_expt_id, 
+                                                "^ATII expt")]
+
+paired_tsne_theme  <- theme(axis.title.x = element_blank(),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10))
+
+
+cell_markers <- c(
+  ciliary_markers,
+  club_markers,
+  endos_markers, 
+  fibs_markers, 
+  eos_markers, 
+  macs_markers, 
+  at2_markers, 
+  at1_markers, 
+  basal_markers,
+  dend_markers,
+  ly6_markers
+)
+
+dir.create(file.path("fig2", "misc", "tsne_markers_by_cell_type"), 
+           recursive = T,
+           showWarnings = FALSE)
+
+map(cell_markers, function(x){
+  out_path <- file.path("fig2", 
+                        "misc",
+                       "tsne_markers_by_cell_type",
+                       x)
+  dir.create(out_path,
+             recursive = T,
+             showWarnings = FALSE)
+  
+  plot_grouped_features(atcells,
+                      gene_to_plot = x,
+                      out_dir = out_path)})
+
+```
+
+### cell markers matched tsne + violin
+
+```{r tsne_violins}
+
+dir.create(file.path("fig2", "all_cells_violin_tsnes"))
+
+map(cell_markers, function(x){
+  out_name <- file.path("fig2", 
+                       "all_cells_violin_tsnes",
+                       paste0(x, ".pdf"))
+  
+  plt <- plot_violin_tsne(atcells, .gene = x)
+  save_plot(out_name, plt,
+          base_height = 4, 
+          base_aspect_ratio = 1.5)})
+```
+
+#### violin per cell type
+
+```{r vln_cell_type}
+
+
+cell_markers_lst <- lst(
+  ciliary_markers,
+  club_markers,
+  endos_markers, 
+  fibs_markers, 
+  eos_markers, 
+  macs_markers, 
+  at2_markers, 
+  at1_markers, 
+  basal_markers,
+  dend_markers,
+  ly6_markers
+)
+
+dir.create(file.path("fig2", "all_clusters_violin_plots"))
+imap(cell_markers_lst, 
+     function(x, y) {
+       plts <- plot_violin_gene(atcells, .genes = x)
+       save_plot(file.path("fig2", 
+                           "all_clusters_violin_plots", 
+                           paste0(y, ".pdf")), 
+                 plts,
+                 base_height = 6, 
+                 base_aspect_ratio = 1.25)})
+```
+
+## Figure 3 code
+
+exclude contaminating populations (Club, ciliated, basal, endothelial,
+macrophage, fibroblasts)
+
+TSNE plots and graphs of key proliferation, cell cycle arrest, ATII, ATI cell markers shown w/ all
+cells except excluded populations on TSNE and also on injured vs. uninjured separately 
+identify populations
+a. Proliferation: mKi67, PCNA, CDK1, Topo2, Cyclin B1, Cyclin A2, Rrm1, E2F8, E2F7, E2F2,
+E2F1
+b. Cell Cycle Arrest: p15, p53, Cdk4, Cyclin D1, Cyclin D1 BP, E2F4, E2F5
+c. ATII-derived ATI: AQP5, Pdpn, EMP2, Ager, hopx, Cav1, other top ATI cell markers
+(IGFBP2, Rtkn2, Pxdc1), ATII cell markers: Lamp3, C5a, LPCAT, SPA/B/C/D.
+
+
+### TD markers
+
+```{r td_markers}
+dir.create("fig4")
+dir.create(file.path("fig3", "all_cells_violin_tsnes"), 
+           recursive = T, showWarnings = F)
+
+cell_types_to_keep <- c(
+  "Injured Type II",
+  "Proliferating Type II",
+  "Transdifferentiating Type II",
+  "Cell Cycle Arrest Type II",
+  "Naive Type I",
+  "Naive Type II"
+)
+
+idx <- atcells@meta.data$labeled_clusters %in% cell_types_to_keep
+cells_to_keep <- rownames(atcells@meta.data)[idx]
+cells_to_keep_data <- atcells@meta.data[idx, ]
+
+injured_cells <- rownames(cells_to_keep_data[!str_detect(cells_to_keep_data$labeled_clusters, "Naive"), ])
+naive_cells <- rownames(cells_to_keep_data[str_detect(cells_to_keep_data$labeled_clusters,
+                                               "Naive"), ])
+
+```
+
+
+Couldn't figure out the mouse gene symbol for Cyclin D1 BP 
+```{r plt_fxn}
+readme_file <- file.path("fig3", "all_cells_violin_tsnes", "README")
+if(file.exists(readme_file)){
+  unlink(readme_file)
+}
+write_lines("A is uninjured and injured together", readme_file)
+write_lines("B is uninjured ", readme_file)
+write_lines("C is injured ", readme_file)
+
+cells_to_plot <- list(cells_to_keep,
+                   naive_cells,
+                   injured_cells)
+  
+new_cell_markers <- list(
+  proliferation = c( 
+    "Mki67", 
+    "Pcna", 
+    "Cdk1", 
+    "Top2a", 
+    "Ccnb1", 
+    "Ccna2", 
+    "Rrm1", 
+    "E2f8", 
+    "E2f7", 
+    "E2f2",
+    "E2f1"),
+  cell_cycle_arrest = c(
+     "Cdkn2b", 
+     "Trp53", 
+     "Cdk4", 
+     "Ccnd1", 
+     "E2f4", 
+     "E2f5"
+  ),
+  transdiff = c(
+    "Aqp5",
+    "Pdpn",
+    "Emp2",
+    "Ager",
+    "Hopx",
+    "Cav1",
+    "Igfbp2",
+    "Rtkn2",
+    "Pxdc1",
+    "Lamp3",
+    "C5ar1",
+    "Lpcat1",
+    "Sftpa1",
+    "Sftpb",
+    "Sftpc",
+    "Sftpd"
+  )
+)
+
+
+map2(new_cell_markers,
+     names(new_cell_markers),
+  function(genes, outdir){
+  dir.create(file.path("fig3", "all_cells_violin_tsnes", outdir), showWarnings = F)
+  map(genes, ~violin_tsne_cell_split(.x, outdir, cells_to_plot = cells_to_plot))
+})
+```
+
+
+
+### tgfb
+
+```{r tgfb, eval = T}
+
+tgf_markers <- list(
+   tgfbeta = c(
+     "Tgfbr1", 
+     "Tgfbr2", 
+     "Tgfb1", 
+     "Tgfb2", 
+     "Tgfb3", 
+     "Ltbp1", 
+     "Ltbp2", 
+     "Tgfbi", 
+     "Smad7", 
+     "Smurf1", 
+     "Itgb6", 
+     "Itgav", 
+     "Itga5",
+     "Tgif1", 
+     "Smad2", 
+     "Ctgf", 
+     "Acta2", 
+     "Col1a1", 
+     "Fn1", 
+     "Serpine1",
+     "Nog",
+     "Gadd45b",
+     "Fst",
+     "Pdgfb",
+     "Ptk2b",
+     "Nfib",
+     "Nfkbia",
+     "Smad3", 
+     "Smad4", 
+     "Cdh1", 
+     "Vim",
+     "Bmp4", 
+     "Id3", 
+     "Krt8", 
+     "Smad7",
+     "Fstl1"),
+   other = c(
+     "Igfbp2",
+     "Sox9",
+     "Id2",
+     "Foxp2"
+   )
+)
+
+injured_cell_types_to_keep <- c(
+  "Injured Type II",
+  "Proliferating Type II",
+  "Transdifferentiating Type II",
+  "Cell Cycle Arrest Type II"
+)
+
+mdata <- atcells@meta.data
+
+filter_idx <- (mdata$sample_type == "Naive Non-AT-II Epithelial") &
+  (mdata$labeled_clusters %in% "Naive Type I")
+naive_non_atii_epi <- rownames(mdata)[filter_idx]
+naive_atii <- rownames(mdata)[mdata$sample_type == "Naive AT-II" &
+                                  mdata$labeled_clusters %in% cell_types_to_keep]
+injured_atii <- rownames(mdata)[mdata$sample_type =="Injured AT-II" &
+                                  mdata$labeled_clusters %in% injured_cell_types_to_keep]
+
+naive_injured_cell_types <- list(
+  "Injured AT-II Derived" = injured_atii,
+  "Naive AT-II" = naive_atii,
+  "Naive AT-I" = naive_non_atii_epi,
+  "Combined" = c(naive_non_atii_epi, naive_atii, injured_atii))
+
+  dir.create(file.path("fig4", "all_cells_tsne_plots", "tgfbeta"), 
+             showWarnings = F, recursive = T)
+  plts <- map(tgf_markers$tgfbeta, 
+      ~plot_feature(atcells, 
+                    gene = .x,
+                    cell_filter = naive_injured_cell_types$Combined,
+                    pt.alpha = 1) + 
+        theme_cowplot(font_size = 22))
+          
+  map2(plts, 
+      tgf_markers$tgfbeta,
+      ~save_plot(filename = file.path("fig4", "all_cells_tsne_plots",
+                                      "tgfbeta",
+                                     paste0(.y, ".pdf")),
+                .x,
+                base_aspect_ratio = 1.33))
+
+
+dir.create(file.path("fig4", "all_injured_cells_tsne_plots",
+                     "tgfbeta"), 
+             showWarnings = F, recursive = T)
+  plts <- map(tgf_markers$tgfbeta, 
+      ~plot_feature(atcells, 
+                    gene = .x,
+                    cell_filter = naive_injured_cell_types$`Injured AT-II Derived`,
+                    pt.alpha = 1)  + 
+        theme_cowplot(font_size = 22))
+  map2(plts, 
+      tgf_markers$tgfbeta,
+      ~save_plot(filename = file.path("fig4", "all_injured_cells_tsne_plots",
+                                      "tgfbeta",
+                                     paste0(.y, ".pdf")),
+                .x,
+                base_aspect_ratio = 1.33))
+
+  dir.create(file.path("fig4", "all_cells_tsne_plots",
+                     "other"), 
+             showWarnings = F, recursive = T)
+  plts <- map(tgf_markers$other, 
+      ~plot_feature(atcells, 
+                    gene = .x,
+                    cell_filter = naive_injured_cell_types$Combined,
+                    pt.alpha = 1)  + 
+        theme_cowplot(font_size = 22))
+  map2(plts, 
+      tgf_markers$other,
+      ~save_plot(filename = file.path("fig4", "all_cells_tsne_plots",
+                                      "other",
+                                     paste0(.y, ".pdf")),
+                .x,
+                base_aspect_ratio = 1.33))
+  
+  
+  dir.create(file.path("fig4", "all_injured_cells_tsne_plots",
+                     "tgfbeta", "no_legend_label"), 
+             showWarnings = F, recursive = T)
+  plts <- map(tgf_markers$tgfbeta, 
+      ~plot_feature(atcells, 
+                    gene = .x,
+                    cell_filter = naive_injured_cell_types$`Injured AT-II Derived`,
+                    pt.alpha = 1, legend_title = "")  + 
+        theme_cowplot(font_size = 22))
+  map2(plts, 
+      tgf_markers$tgfbeta,
+      ~save_plot(filename = file.path("fig4", "all_injured_cells_tsne_plots",
+                                      "tgfbeta", "no_legend_label",
+                                     paste0(.y, ".pdf")),
+                .x,
+                base_aspect_ratio = 1.33))
+  
+    dir.create(file.path("fig4", "all_injured_cells_tsne_plots",
+                     "tgfbeta"), 
+             showWarnings = F, recursive = T)
+  plts <- map(tgf_markers$tgfbeta, 
+      ~plot_feature(atcells, 
+                    gene = .x,
+                    cell_filter = naive_injured_cell_types$`Injured AT-II Derived`,
+                    pt.alpha = 1)  + 
+        theme_cowplot(font_size = 22))
+  map2(plts, 
+      tgf_markers$tgfbeta,
+      ~save_plot(filename = file.path("fig4", "all_injured_cells_tsne_plots",
+                                      "tgfbeta",
+                                     paste0(.y, ".pdf")),
+                .x,
+                base_aspect_ratio = 1.33))
+```
+
+### Notch wnt signaling
+
+11.	TSNE plots and/or heatmaps and/or graphs of b-catenin, HIF signaling, Notch Signaling
+a.	Notch: Jag1, Sox9, Edn1, Efnb1, Efna1, Nes, Rnd1, Flt1, Snw1, Id2, Jun, Cx3cl1, Hes1, Sgpl1, Kalrn, Nampt, Crebbp, Runx1, Tec, Notch1,2,3,4, DLL1, Rbpj, Mib1, c-myb, all genes together?  (cloupe allows you to show TSNEs of expression of 10 genes simulatenously, I guess it is average expression level)
+
+```{r wnt_notch, eval = T}
+
+notch_markers <- list(
+   notch = c(
+    "Jag1",
+    "Sox9", 
+  	"Edn1", 
+  	"Efnb1", 
+  	"Efna1", 
+  	"Nes", 
+  	"Rnd1", 
+  	"Flt1", 
+  	"Snw1", 
+  	"Id2", 
+  	"Jun", 
+  	"Cx3cl1", 
+  	"Hes1", 
+  	"Sgpl1", 
+  	"Kalrn", 
+  	"Nampt", 
+  	"Crebbp", 
+  	"Runx1", 
+  	"Tec", 
+  	"Notch1",
+  	"Notch2",
+  	"Notch3",
+  	"Notch4", 
+  	"Dll1", 
+  	"Rbpj", 
+  	"Mib1", 
+  	"Myb",
+    "Ets1"),
+   other = c(
+    "Sox9",
+    "Id2",
+    "Foxp2",
+    "S100a4"
+   )
+)
+
+
+write_lines(c("violin_tsne_plots\tdirectory with tsne and violin plots for injured type II derived cells, includes notch pathway genes"), 
+            file.path("fig4", "README.txt"))
+
+dir.create(file.path("fig4", "violin_tsne_plots", "notch"), recursive = T, 
+             showWarnings = F)
+
+map(notch_markers$notch, function(x){
+  out_name <- file.path("fig4", 
+                       "violin_tsne_plots",
+                       "notch",
+                       paste0(x, ".pdf"))
+  
+  plt <- plot_violin_tsne(atcells, 
+                          .gene = x, 
+                          cell_filter = naive_injured_cell_types$`Injured AT-II Derived`)
+  save_plot(out_name, plt,
+          base_height = 4, 
+          base_aspect_ratio = 1.5)})
+
+dir.create(file.path("fig4", 
+                     "violin_tsne_plots", 
+                     "tgfbeta"), 
+           recursive = T, 
+             showWarnings = F)
+
+map(tgf_markers$tgfbeta, function(x){
+  out_name <- file.path("fig4", 
+                       "violin_tsne_plots",
+                       "tgfbeta",
+                       paste0(x, ".pdf"))
+  
+  plt <- plot_violin_tsne(atcells, 
+                          .gene = x, 
+                          cell_filter = naive_injured_cell_types$`Injured AT-II Derived`)
+  save_plot(out_name, plt,
+          base_height = 4, 
+          base_aspect_ratio = 1.5)})
+
+
+
+dir.create(file.path("fig4", 
+                     "violin_tsne_plots", 
+                     "other"), 
+           recursive = T, 
+             showWarnings = F)
+
+map(notch_markers$other, function(x){
+  out_name <- file.path("fig4", 
+                       "violin_tsne_plots",
+                       "other",
+                       paste0(x, ".pdf"))
+  
+  plt <- plot_violin_tsne(atcells, 
+                          .gene = x, 
+                          cell_filter = naive_injured_cell_types$`Injured AT-II Derived`)
+  save_plot(out_name, plt,
+          base_height = 4, 
+          base_aspect_ratio = 1.5)})
+```
+
+
+### injured naive side by side
+
+```{r gene_sets}
+new_cell_markers <- list(
+  proliferation = c( 
+    "Mki67", 
+    "Pcna", 
+    "Top2a", 
+    "Tk1", 
+    "Pola1"),
+  at1_markers = c(
+    "Pdpn",
+    "Emp2",
+    "Hopx",
+    "Akap5",
+    "Aqp5",
+    "Clic5"
+  ), 
+  at2_markers = c(
+     "Sftpc", 
+     "Sftpb",
+     "Lamp3", 
+     "Lyz2",
+     "Abca3"
+  ),
+  cell_cycle_arrest = c(
+     "Cdkn2b", 
+     "Trp53", 
+     "Cdk4", 
+     "Ccnd1", 
+     "E2f4", 
+     "E2f5"
+  )
+)
+
+```
+
+```{r by_sample_type}
+dir.create(file.path("fig3", "tsne_naive_injured_by_sample_type"))
+dir.create(file.path("fig3", "tsne_naive_injured_by_sample_type", 
+                     "tsne_plots"))
+dir.create(file.path("fig3", "tsne_naive_injured_by_sample_type", 
+                     "tsne_plots", "no_labels"))
+
+### with labels
+tsne_plts <- map2(new_cell_markers,
+     names(new_cell_markers),
+    function(x, y){
+  plts <- list()
+  exp_limit = NULL
+  if (x[1] == "Sftpc") {
+    exp_limit = c(0, 12)
+  }
+  plts[[1]] <- tsne_by_sample_type(atcells, 
+                    .gene = x[1],
+                    cell_sets = naive_injured_cell_types,
+                    top_label = names(naive_injured_cell_types),
+                    limit_gene_exp = exp_limit,
+                    resize_tsne = T)
+  
+  plts_no_label <- map(x[2:length(x)], 
+           ~tsne_by_sample_type(atcells, 
+                    .gene = .x,
+                    cell_sets = naive_injured_cell_types, 
+                    resize_tsne = T))
+  plt <- plot_grid(plotlist = c(plts, plts_no_label), ncol = 1)
+
+  save_plot(file.path("fig3", "tsne_naive_injured_by_sample_type", "tsne_plots", 
+                      paste0("tsne_", y, ".pdf")),
+          plt,
+          ncol = 1,
+          nrow = length(x),
+          base_height = 2.75, 
+          base_aspect_ratio = 4)
+  plt
+})
+
+### without labels
+map2(new_cell_markers,
+     names(new_cell_markers),
+    function(x, y){
+  plts <- list()
+  exp_limit = NULL
+  if (x[1] == "Sftpc") {
+    exp_limit = c(0, 12)
+  }
+    
+  plts[[1]] <- tsne_by_sample_type(atcells, 
+                    .gene = x[1],
+                    cell_sets = naive_injured_cell_types,
+                    limit_gene_exp = exp_limit,
+                    resize_tsne = T)
+
+  plts_no_label <- map(x[2:length(x)], 
+           ~tsne_by_sample_type(atcells, 
+                    .gene = .x,
+                    cell_sets = naive_injured_cell_types,
+                    resize_tsne = T))
+       
+  plt <- plot_grid(plotlist = c(plts, plts_no_label), ncol = 1)
+
+  save_plot(file.path("fig3", "tsne_naive_injured_by_sample_type", 
+                      "tsne_plots", "no_labels", 
+                      paste0("tsne_", y, ".pdf")),
+          plt,
+          ncol = 1,
+          nrow = length(x),
+          base_height = 2.75, 
+          base_aspect_ratio = 4)
+})
+
+```
+
+### Cell cycle phase markers
+
+```{r cc_phase}
+cc_phase_markers <- list(
+  s_phase = c( 
+    "Top2a", 
+    "Tk1", 
+    "Pola1",
+    "Ccna2",
+    "Ccne1",
+    "Ccne2"),
+  g2_phase = c(
+    "Cdk1",
+    "Cdk2",
+    "Ccnb1",
+    "Ccnb2",
+    "Ccnd2",
+    "Cdkn2a",
+    "Cdkn1a",
+    "Cdkn1b",
+    "Cdk6"
+  ), 
+  mito = c(
+     "Mad2l1", 
+     "Bub1",
+     "Brca1"),
+  misc = c(
+     "Fgfr2", 
+     "Foxm1")
+)
+
+dir.create(file.path("fig3", "tsne_injured_cell_cycle", 
+                     "tsne_plots", "no_labels"), recursive = T)
+
+write_lines("tsne_plots\ttSNE plots of cell cycle phase markers for injured type II cells (cells from injured sample with contaminating populations excluded (a small number of cells)",
+            file.path("fig3", "tsne_injured_cell_cycle", "README.txt")) 
+            
+### with labels
+tsne_plts <- map2(cc_phase_markers,
+     names(cc_phase_markers),
+    function(x, y){
+  plts <- list()
+  plts[[1]] <- tsne_by_sample_type(atcells, 
+                    .gene = x[1],
+                    cell_sets =  naive_injured_cell_types["Injured AT-II Derived"],
+                    top_label = "Injured AT-II Derived",
+                    resize_tsne = T)
+  
+  plts_no_label <- map(x[2:length(x)], 
+           ~tsne_by_sample_type(atcells, 
+                    .gene = .x,
+                    cell_sets = naive_injured_cell_types["Injured AT-II Derived"],
+                    resize_tsne = T))
+  plt <- plot_grid(plotlist = c(plts, plts_no_label), 
+                   ncol = 1)
+
+  save_plot(file.path("fig3", "tsne_injured_cell_cycle", "tsne_plots", 
+                      paste0("tsne_", y, ".pdf")),
+          plt,
+          ncol = 1,
+          nrow = length(x),
+          base_height = 2.75, 
+          base_aspect_ratio = 1.33)
+  plt
+})
+
+
+### without labels
+tsne_plts <- map2(cc_phase_markers,
+     names(cc_phase_markers),
+    function(x, y){
+  plts <- list()
+  plts[[1]] <- tsne_by_sample_type(atcells, 
+                    .gene = x[1],
+                    cell_sets =  naive_injured_cell_types["Injured AT-II Derived"], 
+                    resize_tsne = T)
+  
+  plts_no_label <- map(x[2:length(x)], 
+           ~tsne_by_sample_type(atcells, 
+                    .gene = .x,
+                    cell_sets = naive_injured_cell_types["Injured AT-II Derived"],
+                    resize_tsne = T))
+  plt <- plot_grid(plotlist = c(plts, plts_no_label), 
+                   ncol = 1)
+
+  save_plot(file.path("fig3", "tsne_injured_cell_cycle", "tsne_plots", "no_labels",
+                      paste0("tsne_", y, ".pdf")),
+          plt,
+          ncol = 1,
+          nrow = length(x),
+          base_height = 2.75, 
+          base_aspect_ratio = 1.33)
+  plt
+})
+```
+
+## Misc
+
+```{r dir}
+dir.create("misc")
+```
+
+```{r cluster_ids}
+
+
+write_lines("tsne_cluster_ids.pdf\tTSNE labeled with unbiased cluster ids",
+            file.path("misc", "README.txt"))
+
+many_cols <- c(brewer.pal(n = 12, "Paired"), 
+               brewer.pal(n = 8, "Set2"), 
+               brewer.pal(n = 8, "Dark2"))
+
+atcells <- SetAllIdent(atcells, "res.1.6")
+plt <- plot_tsne(atcells, ident = "res.1.6", 
+                 label_text = T, label.color = "Black", 
+                 .cols = many_cols) 
+save_plot(file.path("misc", "tsne_cluster_ids.pdf"), 
+          plt, base_height = 6, base_aspect_ratio = 1.33)
+
+plt <- plot_tsne(atcells, ident = "res.1.6", 
+                 label_text = F,  .cols = many_cols) 
+save_plot(file.path("misc", "tsne_cluster_ids_no_labels.pdf"), 
+          plt, base_height = 6, base_aspect_ratio = 1.33)
+```
+
+```{r clusters}
+tsne_col_pal <- brewer.pal(11, "Paired")
+
+write_lines("tsne_cell_labels.pdf\tTSNE colored by designated cell type",
+            file.path("misc", "README.txt"), append = T)
+
+set.seed(42)
+new_cols <- sample(tsne_col_pal, length(tsne_col_pal))
+
+cell_id_labels <- c("Endothelial",
+  "Basal",
+  "Club",
+  "Ciliary",
+  "Naive Type I",
+  "Macrophages",
+  "Injured Type II",
+  "Proliferating Type II",
+  "Cell Cycle Arrest Type II",
+  "Transdifferentiating Type II",
+  "Naive Type II")
+
+
+plt <- plot_tsne(atcells, ident = "labeled_clusters", 
+                 .cols = new_cols, 
+                 pt.alpha = 0.75, 
+                 legend_order = factor(cell_id_labels) )
+
+save_plot(file.path("misc", "tsne_cell_labels.pdf"), 
+          plt, base_height = 6, base_aspect_ratio = 1.33)
+```
+### GFP
+```{r gfp_tsne}
+write_lines(c("misc/tsne_gfp_all_cells.pdf\ttSNE of gfp expression in all cells",
+              "misc/tsne_split_cells_gfp.pdf\ttSNE of gfp expression split out into cell types of interest"), 
+            file.path("misc", "README.txt"), append = T)
+
+plt <- plot_feature(atcells, gene = "gfp_counts",
+             meta_data_col = T, pt.alpha = 1) +
+      guides(color = guide_colorbar(barwidth = 0.5, barheight = 5)) +
+      theme(axis.text = element_text(size = 10),
+            axis.title = element_text(size = 10),
+            legend.title = element_text(size = 10),
+            legend.text = element_text(size = 10))
+
+save_plot("misc/tsne_gfp_all_cells.pdf", plt, base_height = 6, base_aspect_ratio = 1.33)
+
+plt <- tsne_by_sample_type(atcells, 
+                    .gene = "gfp_counts",
+                    cell_sets = naive_injured_cell_types,
+                    top_label = names(naive_injured_cell_types), 
+                    meta_data_col = TRUE)
+  
+save_plot(file.path("misc", paste0("tsne_split_cells_gfp.pdf")),
+          plt,
+          base_height = 2.75, 
+          base_aspect_ratio = 4.75)
+
+plt <- tsne_by_sample_type(atcells, 
+                    .gene = "gfp_counts",
+                    cell_sets = naive_injured_cell_types,
+                    meta_data_col = TRUE)
+  
+save_plot(file.path("misc", paste0("tsne_split_cells_gfp_no_label.pdf")),
+          plt,
+          base_height = 2.75, 
+          base_aspect_ratio = 4.75)
+```
+### Mito
+```{r mito_tsne}
+
+plt <- plot_feature(atcells, gene = "proportion.mito",
+             meta_data_col = T, pt.alpha = 1) +
+      guides(color = guide_colorbar(barwidth = 0.5, barheight = 5)) +
+      theme(axis.text = element_text(size = 10),
+            axis.title = element_text(size = 10),
+            legend.title = element_text(size = 10),
+            legend.text = element_text(size = 10))
+
+save_plot("misc/tsne_mito_all_cells.pdf", plt, base_height = 6, base_aspect_ratio = 1.33)
+```
+### UMI
+```{r umi_tsne}
+
+umi_plt <- plot_feature(atcells, gene = "nUMI",
+             meta_data_col = T, pt.alpha = 1) +
+      guides(color = guide_colorbar(barwidth = 0.5, barheight = 5)) +
+      labs(color = "# of UMIs") + 
+      theme(axis.text = element_text(size = 10),
+            axis.title = element_text(size = 10),
+            legend.title = element_text(size = 10),
+            legend.text = element_text(size = 10))
+
+save_plot("misc/tsne_umi_all_cells.pdf", umi_plt, base_height = 6, base_aspect_ratio = 1.33)
+```
+
+### Genes
+```{r genes_tsne}
+
+gene_plt <- plot_feature(atcells, gene = "nGene",
+             meta_data_col = T, pt.alpha = 1) +
+      guides(color = guide_colorbar(barwidth = 0.5, barheight = 5)) +
+      labs(color = "# of Genes") + 
+      theme(axis.text = element_text(size = 10),
+            axis.title = element_text(size = 10),
+            legend.title = element_text(size = 10),
+            legend.text = element_text(size = 10))
+
+save_plot("misc/tsne_genes_all_cells.pdf", gene_plt, base_height = 6, base_aspect_ratio = 1.33)
+
+plt <- plot_grid(umi_plt, gene_plt)
+save_plot("misc/tsne_umi_genes_all_cells.pdf", plt, nrow = 1, ncol = 2,
+          base_height = 3,
+          base_aspect_ratio = 1.33)
+```
+
+### TSNE naive type ii and naive-non-epi
+```{r}
+write_lines(c("misc/tsne_naive_nonepi.pdff\ttSNE of all naive cells"), 
+            file.path("misc", "README.txt"), append = T)
+
+plt <- plot_tsne(atcells, ident = "sample_type",
+          .cols = brewer.pal(3, "Set1"),
+          pt.alpha = 1,
+          cell_filter = naive_cell_types$all_naive) 
+
+save_plot(file.path("misc", "tsne_naive_nonepi.pdf"), plt,
+                    base_height = 6, base_aspect_ratio = 1.33)
+```
+
+### TSNE naive type ii subclusters
+```{r}
+write_lines(c("misc/tsne_naive_subclusters.pdf\ttSNE of naive type II subclusters (8 and 13, 11 and 12"), 
+            file.path("misc", "README.txt"), append = T)
+
+plt <- plot_tsne(atcells, ident = "sample_type",
+          .cols = brewer.pal(3, "Set1"),
+          pt.alpha = 1,
+          cell_filter = naive_cell_types$all_naive) 
+
+save_plot(file.path("misc", "tsne_naive_subclusters.pdf"), plt,
+                    base_height = 6, base_aspect_ratio = 1.33)
+```
+
+### Just Tsne
+
+```{r}
+write_lines(c("misc/tsne_no_labels.pdf\ttSNE of all cells"), 
+            file.path("misc", "README.txt"), append = T)
+
+plt <- plot_tsne(atcells, 
+          .cols = brewer.pal(3, "Set1")[2],
+          pt.alpha = 1) +
+  theme(legend.position = "none")
+
+save_plot(file.path("misc", "tsne_no_labels.pdf"), plt,
+                    base_height = 6, base_aspect_ratio = 1.33)
+```
+
+
+
+## Compare AT1 and AT2 profiles to "bipotent" progenitors
+
+
+```{r get_dat}
+
+bp_dat <- file.path("extdata", "nature13173-s4.txt")
+if (!file.exists(bp_dat)) {  download.file("https://media.nature.com/original/nature-assets/nature/journal/v509/n7500/extref/nature13173-s4.txt", 
+                                           bp_dat)
+}
+
+bp_dat <- read_tsv(bp_dat)
+
+## exclude control cells, and non AT1 or AT2 cell types
+
+bp_dat <- filter(bp_dat, putative_cell_type %in% c("BP", "AT1", "AT2"))
+bp_metadat <- select(bp_dat, cell_name:putative_cell_type)
+bp_mat <- select(bp_dat, -time_point, -sample, -putative_cell_type) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell_name") %>% 
+  as.matrix(.) %>% 
+  t(.)
+
+
+naive_markers <- read_tsv(file.path("markers",
+                          "naive_cell_types_no_injured_markers_wilcox.txt")) %>% 
+  filter(cluster %in% c("Naive Type I", "Naive Type II"))
+
+#injured_markers <- read_tsv(file.path("markers",
+#                          "td_injured_markers_wilcox.txt"))
+
+top_markers <- filter(naive_markers, 
+                      gene %in% rownames(bp_mat)) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = T) %>% 
+  slice(1:25) 
+
+expr_dat <- atcells@data[top_markers$gene, ]
+bp_hmap <- bp_mat[top_markers$gene, ]
+
+bp_metadat <- bp_metadat %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell_name")
+
+bp_metadat <- bp_metadat[colnames(bp_hmap), "putative_cell_type", 
+                         drop = F]
+
+cell_samples <- unique(bp_metadat$putative_cell_type)
+cols <- brewer.pal(length(cell_samples), "Paired")
+names(cols) <- cell_samples
+
+ha <- HeatmapAnnotation(bp_metadat,
+                        col = list(putative_cell_type = cols))
+hm <- Heatmap(bp_hmap, 
+              top_annotation = ha,
+              row_order = top_markers$gene,
+              cluster_rows = F,
+              show_row_names = F,
+              show_column_names = F)
+hm
+
+```
+
+```{r markers_from_nature}
+
+nature_markers <- list(
+  ATII = c(
+    "S100g",
+    "Slc34a2",
+    "Lamp3",
+    "Bex2",
+    "Cd36",
+    "Etv5",
+    "Scd1",
+    "Il33",
+    "Fabp5",
+    "Hc",
+    "Sftpa1",
+    "Dlk1",
+    "Cxcl15",
+    "Chsy1",
+    "Lcn2",
+    "Fasn",
+    "Sftpb",
+    "Egfl6",
+    "Lyz1",
+    "Sftpc",
+    "Soat1",
+    "Glrx",
+    "Mlc1",
+    "Retnla",
+    "Mid1ip1",
+    "Chi3l1",
+    "Rab27a",
+    "Fabp12",
+    "Lgi3",
+    "Lyz2"),
+  ATI = c(
+    "Clic5",
+    "Pdpn",
+    "Akap5",
+    "Lmo7",
+    "Ahnak",
+    "Sdpr",
+    "Emp2",
+    "Col4a3",
+    "Rtkn2",
+    "Cav1",
+    "Timp3",
+    "Ager",
+    "Msn",
+    "Limch1",
+    "Hopx",
+    "Ptrf",
+    "S100a6",
+    "Dpysl2",
+    "Agrn",
+    "Akap2",
+    "Pmp22",
+    "Tinagl1",
+    "Lgals3",
+    "S100a14",
+    "Malat1",
+    "Vegfa",
+    "Samhd1",
+    "Qk",
+    "Sema3a",
+    "Aqp5")
+  )
+
+nature_markers <- bind_rows(nature_markers) %>% 
+  gather(cell_type, gene) 
+
+bp_hmap <- bp_mat[unique(nature_markers$gene), ]
+
+marker_means <- data_frame(avg_expr = unname(rowMeans(bp_hmap)),
+                           gene = names(rowMeans(bp_hmap)))
+nature_markers <- left_join(nature_markers, 
+          marker_means, by = "gene")
+
+nature_markers <- nature_markers %>% 
+  group_by(cell_type) %>% 
+  arrange(desc(avg_expr), .by_group = T)
+
+cell_samples <- unique(bp_metadat$putative_cell_type)
+cols <- brewer.pal(length(cell_samples), "Paired")
+names(cols) <- cell_samples
+
+
+ha <- HeatmapAnnotation(bp_metadat,
+                        col = list(putative_cell_type = cols))
+hm <- Heatmap(bp_hmap, 
+              top_annotation = ha,
+              row_order = nature_markers$gene, 
+              show_row_names = T,
+              show_column_names = F,
+              cluster_rows = F)
+hm
+
+```
+
+````{r}
+mdata <- atcells@meta.data[, "labeled_clusters", drop = F]
+cell_samples <- unique(mdata$labeled_clusters)
+cols <- brewer.pal(length(cell_samples), "Paired")
+names(cols) <- cell_samples
+
+# Chil1 == Chi3l1
+nature_markers_fixed <- nature_markers
+nature_markers_fixed$gene[nature_markers_fixed$gene == "Chi3l1"] <- "Chil1"
+  
+td_cell_types <- c(
+  "Proliferating Type II",
+  "Cell Cycle Arrest Type II",
+  "Transdifferentiating Type II")
+
+mdata <- mdata[mdata$labeled_clusters %in% td_cell_types, , drop = F]
+
+ha <- HeatmapAnnotation(mdata,
+                        col = list(labeled_clusters = cols))
+
+zscores <- as.matrix(atcells@data[top_markers$gene,
+                               rownames(mdata)])
+hm <- Heatmap(zscores, 
+              top_annotation = ha,
+              row_order = top_markers$gene,
+              show_row_names = F,
+              show_column_names = F,
+              show_column_dend = F,
+              cluster_rows = F)
+hm
+```
+
+
+```{r progression_markers}
+progression_genes <- list(
+  AT2_late = c(
+    "Lcn2",
+    "Il33",
+    "Hc",
+    "Trf",
+    "Lyz2",
+    "S100g",
+    "Lyz1"),
+  AT2_early = c(
+    "Fabp5",
+    "Lamp3",
+    "Cd36",
+    "Scd1",
+    "Sftpb",
+    "Slc34a2",
+    "Abca3",
+    "Sftpa1",
+    "Egfl6",
+    "Soat1",
+    "Bex2",
+    "Muc1",
+    "Sftpc"
+  ),
+  AT1_early = c(
+    "Aqp5",
+    "Pdpn",
+    "Rtkn2",
+    "Ager",
+    "Emp2",
+    "Cav1",
+    "Clic5",
+    "Lmo7",
+    "S100a6",
+    "Col4a3",
+    "Akap5",
+    "Cryab"
+  ),
+  AT1_late = c(
+    "Sdpr",
+    "S100a14"
+  )
+)
+```
+
+```{r hmap, fig.height = 8}
+bp_hmap <- bp_mat[unique(unlist(progression_genes)), ]
+
+cell_samples <- unique(bp_metadat$putative_cell_type)
+cols <- brewer.pal(length(cell_samples), "Paired")
+names(cols) <- cell_samples
+ha <- HeatmapAnnotation(bp_metadat,
+                        col = list(putative_cell_type = cols))
+
+
+hm <- Heatmap(bp_hmap, 
+              row_order = unlist(progression_genes),
+              top_annotation = ha,
+              show_row_names = T,
+              show_column_names = F,
+              cluster_rows = F, 
+              cluster_columns = T,
+              row_names_side = "left")
+
+hm@column_order
+```
+
+```{r dotplot_dev, fig.height = 12}
+td_cell_types <- c(
+  "Injured Type II",
+  "Proliferating Type II",
+  "Cell Cycle Arrest Type II",
+  "Transdifferentiating Type II",
+  "Naive Type I"
+  )
+
+
+cells_to_use <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in%
+                              td_cell_types]
+
+sub_atcells <-SubsetData(atcells, cells.use = cells_to_use)
+sub_atcells <- SetAllIdent(sub_atcells, "labeled_clusters")
+
+og_plt <- DotPlot(sub_atcells, 
+        genes.plot = factor(rev(unlist(progression_genes))),
+        x.lab.rot = T,
+        plot.legend = T,
+        cols.use = brewer.pal(9, "Blues")[c(1, 9)],
+        do.return = T) +
+  scale_y_discrete(limits = td_cell_types) +
+  coord_flip() +
+  labs(colour = "Z-score\nAverage\nExpression",
+       size = "Percent of cells\nwith expression")
+
+save_plot(file.path("misc", "dotplot_development.pdf"), 
+          og_plt,
+          base_height = 8,
+          base_aspect_ratio = 0.6)
+```
+
+```{r dotplot_nature}
+## dl data from GEO
+outdir <- file.path("extdata", "GSE52583")
+ex_file <- file.path(outdir, 
+                     "GSM1271862_E18_1_C08_IL3230.sorted.genes.fpkm_tracking.gz")
+if (!file.exists(ex_file)) {
+  dl_url <- "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE52583&format=file"
+  
+  dir.create(outdir)
+  download.file(dl_url, file.path(outdir,"tmp.tar"))
+  untar(file.path(outdir, "tmp.tar"), exdir = outdir)
+  unlink(file.path(outdir, "tmp.tar"))
+}
+
+fpkm_files <- dir(outdir, 
+                  pattern = ".gz$",
+                  full.names = T)
+
+e18_files <- str_subset(fpkm_files, "_E18_") %>% 
+  .[!str_detect(., "_PTC_|_NTC")]
+
+e18_dat <- suppressMessages(map(e18_files, read_tsv, col_names = F))
+names(e18_dat) <- basename(e18_files)
+e18_dat <- map(e18_dat, ~select(.x, X4, X10))
+e18_dat <- bind_rows(e18_dat, .id = "library")
+colnames(e18_dat) <- c("library", "gene_id", "FPKM")
+
+e18_dat <- mutate(e18_dat,
+                  cell_id = str_match(library,
+                                      "E18_[0-9]_[a-zA-Z][0-9][0-9]")[, 1])
+
+e18_dat <- dplyr::select(e18_dat, 
+                         -library,
+                         cell_id, gene_id, FPKM)
+
+genes_present <- filter(e18_dat, cell_id == "E18_1_C08") %>% 
+  pull(gene_id)
+duplicated_genes <- unique(genes_present[duplicated(genes_present)])
+e18_mat <- filter(e18_dat, 
+                  !gene_id %in% duplicated_genes) %>% 
+  spread(cell_id, FPKM) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("gene_id") %>% 
+  as.matrix()
+
+## just keep BP, AT1, and AT2 cells
+e18_mat <- e18_mat[, colnames(e18_mat) %in% rownames(bp_metadat)]
+
+## make dummy seurat object with public data
+dummy_obj <- atcells
+dummy_obj@data <- as(log1p(e18_mat), "sparseMatrix")
+mdata <- bp_metadat %>%
+  tibble::rownames_to_column("cell_name") %>% 
+  mutate(orig.ident = ifelse(putative_cell_type == "AT1",
+                             "Naive Type I",
+                             ifelse(putative_cell_type == "AT2",
+                                    "Naive Type II",
+                                    "Bipotent Progenitor"))) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell_name")
+
+dummy_obj@meta.data <- mdata[colnames(e18_mat), ]
+dummy_obj@cell.names <- colnames(dummy_obj@data)
+dummy_obj@ident <- factor(dummy_obj@meta.data$orig.ident)
+
+at_cell_types <- c(
+  "Naive Type II",
+  "Bipotent Progenitor",
+  "Naive Type I"
+)
+nature_plt <- DotPlot(dummy_obj, 
+        genes.plot = factor(rev(unlist(progression_genes))),
+        x.lab.rot = T,
+        plot.legend = T,
+        cols.use = brewer.pal(9, "Blues")[c(1, 9)],
+        do.return = T) +
+  scale_y_discrete(limits = at_cell_types) +
+  coord_flip() +
+  labs(colour = "Z-score\nAverage\nExpression",
+       size = "Percent of cells\nwith expression")
+
+save_plot(file.path("misc", "dotplot_development_naturedata.pdf"), 
+          nature_plt,
+          base_height = 8,
+          base_aspect_ratio = 0.6)
+
+```
+
+
+```{r plot_both}
+plt <- plot_grid(og_plt, nature_plt, align = "hv")
+save_plot(file.path("misc","dotplot_development_both.pdf"), 
+          plt,
+          nrow = 1, ncol = 2,
+          base_height = 8,
+          base_aspect_ratio = 0.6)
+          
+```
+
+
+
+## examine cluster robustness
+
+```{r, cache.lazy=FALSE}
+atcells <- readRDS("s_obj.rds")
+atcells <- SetAllIdent(atcells, "res.1.6")
+
+params <- seq(0.3, 1.9, 0.3)
+for (i in seq_along(params)){
+   atcells <- FindClusters(atcells, 
+                     reduction.type = "pca", 
+                     dims.use = 1:15,
+                     k.param = 30, 
+                     resolution = params[i], 
+                     print.output = 0, 
+                     plot.SNN = F,
+                     save.SNN = T, 
+                     random.seed = 0)
+}
+
+clustering_params <- colnames(atcells@meta.data) %>% 
+  str_subset("res")
+
+# generate tsnes for each clustering setting
+clust_tsnes <- map(clustering_params,
+     function(x){
+       atcells <- SetAllIdent(atcells, x); 
+       TSNEPlot(atcells, 
+                pt.size = 0.5,
+                do.label = T,
+                label.size = 10,
+                do.return = T,
+                no.legend = T, 
+                plot.title = x)
+     })
+
+
+plt <- plot_grid(plotlist = clust_tsnes)
+save_plot("clustering_params.pdf", plt, nrow = 3, ncol = 3)
+```
+## Session Info
+```{r}
+sessionInfo()
+```
+

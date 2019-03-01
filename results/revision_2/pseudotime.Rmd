@@ -1,0 +1,552 @@
+---
+title: "Psuedotime method comparison"
+author: "Kent Riemondy RBI"
+date: '`R Sys.Date()`'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    fig_caption: yes
+    fig_retina: 1
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/globals.R")
+data_dir <- file.path(data_dir, "updated")
+```
+
+```{r}
+atcells <- readRDS(file.path("preprocess", "s_obj_final.rds"))
+cells_to_keep <- c("Naive Type I",
+                    "Injured Type II",
+                    "Proliferating Type II",
+                    "Cell Cycle Arrest Type II",
+                    "Transdifferentiating Type II",
+                    "Naive Type II")
+
+cell_ids_to_keep <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters %in% cells_to_keep]
+
+atcells <- SubsetData(atcells, cells.use = cell_ids_to_keep)
+```
+
+## Monocle
+
+```{r}
+out_dir <- "pseudotime"
+m_out_dir <- file.path(out_dir, "monocle")
+dir.create(m_out_dir) 
+
+library(monocle)
+atm <- importCDS(atcells)
+atm <- estimateSizeFactors(atm)
+atm <- estimateDispersions(atm)
+    
+# select_genes
+atm <- detectGenes(atm, min_expr = 0.1)
+
+atm_expressed_genes <-  row.names(subset(fData(atm),
+                                         num_cells_expressed >= 10))
+
+clustering_DEG_genes <- differentialGeneTest(atm[atm_expressed_genes,],
+                                             fullModelFormulaStr = '~res.0.6',
+                                             cores = 4)
+
+
+write_tsv(as_tibble(clustering_DEG_genes, rownames = "gene"),
+          file.path(m_out_dir, "monocle_markers.tsv"))
+
+## use top DE genes based on monocle algo
+atm_ordering_genes <- row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:1000]
+
+atm <- setOrderingFilter(atm,
+                         ordering_genes = atm_ordering_genes)
+
+atm <- reduceDimension(atm, 
+                       method = 'DDRTree')
+atm <- orderCells(atm)
+
+saveRDS(atm, file.path(m_out_dir,
+                       "pt_mono.rds"))
+#atm <- readRDS(file.path(m_out_dir,
+#                       "pt_mono.rds"))
+
+clustering_DEG_genes <- read_tsv(file.path(m_out_dir, "monocle_markers.tsv"))
+```
+
+Next run with varying numbers of input ordering genes
+```{r}
+
+n_ordering_genes <- c(1000, 2000)
+walk(n_ordering_genes, function(n_genes) {
+  atm_ordering_genes <- row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:n_genes]
+  atm <- setOrderingFilter(atm, ordering_genes = atm_ordering_genes)
+  
+  atm <- reduceDimension(atm,
+                         method = 'DDRTree')
+  atm <- orderCells(atm)
+  
+  tmp_out_dir <- file.path(m_out_dir, paste0(n_genes, "_ordering_genes"))
+  
+  dir.create(tmp_out_dir, showWarnings = F)
+  saveRDS(atm, file.path(tmp_out_dir, paste0(n_genes, "pt.rds")))
+  gc()
+})
+
+
+cell_id_relabel <- c("Endothelial" = "Endothelial/Fibroblast",
+  "Basal" = "Basal",
+  "Club" = "Club",
+  "Ciliary" = "Ciliated",
+  "Naive Type I" = "Naive AEC1",
+  "Macrophages" = "Macrophage",
+  "Injured Type II" = "Other Injured AEC2",
+  "Proliferating Type II" = "Injured AEC2: Proliferating",
+  "Cell Cycle Arrest Type II" = "Injured AEC2: Cell Cycle Arrest",
+  "Transdifferentiating Type II" = "Injured AEC2: Transdifferentiating",
+  "Naive Type II" = "Naive AEC2")
+
+id_order <- c(
+  "Naive AEC1",
+  "Naive AEC2",
+  "Other Injured AEC2",
+  "Injured AEC2: Proliferating",
+  "Injured AEC2: Cell Cycle Arrest",
+  "Injured AEC2: Transdifferentiating"
+)
+plts <- map(n_ordering_genes,
+    function(n_genes){
+      in_dat <- file.path(m_out_dir,
+                          paste0(n_genes, "_ordering_genes"), 
+                          paste0(n_genes, "pt.rds"))
+      tmp_dat <- readRDS(in_dat)
+      new_ids <-  cell_id_relabel[pData(tmp_dat)$labeled_clusters]
+      new_ids <- factor(new_ids, levels = id_order)
+      pData(tmp_dat)$pretty_cell_labels <- new_ids
+      plot_cell_trajectory(tmp_dat, color_by = "pretty_cell_labels",
+                           cell_size = 0.1) + 
+        scale_colour_brewer(palette = "Set1", 
+                          name = "") + 
+        guides(colour = guide_legend(override.aes = list(size = 5))) + 
+        theme(legend.position = "right")
+    })
+
+plt <- plot_grid(plotlist = plts)
+save_plot(file.path(m_out_dir, "n_genes_analysis.pdf"), 
+          plt, nrow = 1, ncol = 2, base_aspect_ratio = 1.75)
+
+s12_outdir <- "revision/supplement/fig12"
+dir.create(s12_outdir)
+file.copy(file.path(m_out_dir, "n_genes_analysis.pdf"), 
+          s12_outdir)
+```
+
+Next exclude naive type 2 as requested. 
+
+```{r}
+ n_genes <- 1000
+atm_subset <- atm[, pData(atm)$labeled_clusters != "Naive Type II"]
+
+atm_ordering_genes <- row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:n_genes]
+atm_subset <- setOrderingFilter(atm_subset, ordering_genes = atm_ordering_genes)
+  
+atm_subset <- reduceDimension(atm_subset,
+                         method = 'DDRTree')
+
+atm_subset <- orderCells(atm_subset)
+  
+tmp_out_dir <- file.path(m_out_dir, "no_naive_type_ii")
+  
+dir.create(tmp_out_dir, showWarnings = F)
+saveRDS(atm_subset, file.path(tmp_out_dir, paste0(n_genes, "pt.rds")))
+gc()
+  
+```
+
+
+Next downsample injured AEC2 as requested
+
+```{r}
+ n_genes <- 1000
+
+non_type_ii <- rownames(pData(atm_subset))[pData(atm_subset)$labeled_clusters != "Injured Type II"]
+ 
+
+type_ii <- rownames(pData(atm_subset))[pData(atm_subset)$labeled_clusters == "Injured Type II"]
+
+# sample injured type II
+set.seed(42)
+type_ii <- sample(type_ii, size = length(non_type_ii), replace = FALSE)
+
+cells <- c(type_ii, non_type_ii)
+atm_subset <- atm_subset[, cells]
+
+atm_ordering_genes <- row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:n_genes]
+atm_subset <- setOrderingFilter(atm_subset, ordering_genes = atm_ordering_genes)
+  
+atm_subset <- reduceDimension(atm_subset,
+                         method = 'DDRTree')
+
+atm_subset <- orderCells(atm_subset)
+  
+tmp_out_dir <- file.path(m_out_dir, "downsampled_injured")
+  
+dir.create(tmp_out_dir, showWarnings = F)
+saveRDS(atm_subset, file.path(tmp_out_dir, paste0(n_genes, "pt.rds")))
+gc()
+  
+```
+
+
+
+```{r}
+other_samples <- c("downsampled_injured", "no_naive_type_ii")
+plts <- map(other_samples,
+    function(x){
+      in_dat <- file.path(m_out_dir,
+                          x, "1000pt.rds")
+      tmp_dat <- readRDS(in_dat)
+      new_ids <-  cell_id_relabel[pData(tmp_dat)$labeled_clusters]
+      new_ids <- factor(new_ids, levels = id_order)
+      pData(tmp_dat)$pretty_cell_labels <- new_ids
+      plot_cell_trajectory(tmp_dat, color_by = "pretty_cell_labels",
+                           cell_size = 0.1) + 
+        scale_colour_brewer(palette = "Set1", 
+                          name = "") + 
+        guides(colour = guide_legend(override.aes = list(size = 5))) + 
+        theme(legend.position = "right")
+    })
+
+plt <- plot_grid(plotlist = plts)
+save_plot(file.path(m_out_dir, "different_filtering.pdf"), 
+          plt, nrow = 1, ncol = 2, base_aspect_ratio = 1.75)
+
+s12_outdir <- "revision/supplement/fig12"
+dir.create(s12_outdir)
+file.copy(file.path(m_out_dir, "different_filtering.pdf"), 
+          s12_outdir)
+
+```
+
+```{r}
+plot_markers <- function(obj, marker){
+  plot_cell_trajectory(obj, 
+                     markers = marker, 
+                     use_color_gradient = T, 
+                     option = "C", 
+                     cell_size =  0.75) +
+    theme(
+      legend.position = "none"
+    )
+}
+
+gene_lists <- list(
+  Ciliary = c("Foxj1",
+              "Ccdc39",
+              "Tubb4a",
+              "Ccdc113"),
+  Club = c("Scgb1a1", 
+           "Scgb3a1", 
+           "Scgb3a2", 
+           "Chad"),
+  Basal = c("Krt5", 
+            "Trp63", 
+            "Krt14", 
+            "Krt15"),
+  AEC1 =  c("Pdpn", 
+            "Emp2", 
+            "Hopx", 
+            "Akap5", 
+            "Aqp5", 
+            "Clic5"),   
+  AEC2 = c("Sftpc", 
+           "Lamp3", 
+           "Lyz2", 
+           "Abca3", 
+           "Sftpa1"),
+  Mac = c("Ptprc", 
+          "Cd68", 
+          "Siglecf"),
+  Eos = c("Ptprc", 
+          "Fcer1g"),
+  Fibroblasts = c("Col1a1",
+                  "Col3a1",
+                  "Col1a2",
+                  "Vim",
+                  "S100a4"),
+  Endothelial = c("Thbd",
+                  "Vcam1"),
+  Dendritic = c("Itgax",
+                "Ptprc"),
+  Ly6 = c("Cd3e",
+          "Cd4",
+          "Cd8b1",
+          "Cd19",
+          "Ptprc",
+          "Ly6g"),
+  Proliferation = c( 
+    "Mki67", 
+    "Pcna", 
+    "Cdk1", 
+    "Top2a", 
+    "Ccnb1", 
+    "Ccna2", 
+    "Rrm1", 
+    "E2f8", 
+    "E2f7", 
+    "E2f2",
+    "E2f1"),
+  Transdiff = c(
+    "Aqp5",
+    "Pdpn",
+    "Emp2",
+    "Ager",
+    "Hopx",
+    "Cav1",
+    "Igfbp2",
+    "Rtkn2",
+    "Pxdc1",
+    "Lamp3",
+    "C5ar1",
+    "Lpcat1",
+    "Sftpa1",
+    "Sftpb",
+    "Sftpc",
+    "Sftpd"
+  ),
+  Cell_cycle_arrest = c(
+     "Cdkn2b", 
+     "Trp53", 
+     "Cdk4", 
+     "Ccnd1", 
+     "E2f4", 
+     "E2f5"
+  ),
+  TGFbeta = c(
+      "Tgfbr1", 
+     "Tgfbr2", 
+     "Tgfb1", 
+     "Tgfb2", 
+     "Tgfb3", 
+     "Ltbp1", 
+     "Ltbp2", 
+     "Tgfbi", 
+     "Smad7", 
+     "Smurf1", 
+     "Itgb6", 
+     "Itgav", 
+     "Itga5",
+     "Tgif1", 
+     "Smad2", 
+     "Ctgf", 
+     "Acta2", 
+     "Col1a1", 
+     "Fn1", 
+     "Serpine1",
+     "Nog",
+     "Gadd45b",
+     "Fst",
+     "Pdgfb",
+     "Ptk2b",
+     "Nfib",
+     "Nfkbia",
+     "Smad3", 
+     "Smad4", 
+     "Cdh1", 
+     "Vim",
+     "Bmp4", 
+     "Id3", 
+     "Krt8", 
+     "Smad7",
+     "Fstl1"),
+   Other = c(
+     "Igfbp2",
+     "Sox9",
+     "Id2",
+     "Foxp2"
+  )
+)
+```
+
+```{r}
+out_dir <- file.path("monocle", "ccregress_ddrtree")
+dir.create(out_dir, showWarnings = F)
+iwalk(gene_lists[c("AEC1", "AEC2", "Other", "TGFbeta", "Proliferation", "Transdiff", "Cell_cycle_arrest")], 
+            function(gene_list, gene_list_name){
+              plts <- map(gene_list, 
+                          ~plot_markers(atm, .x))
+              plt <- plot_grid(plotlist = plts)
+              save_plot(file.path(out_dir, paste0(gene_list_name, ".pdf")),
+                        plt, nrow = 4, ncol = 5)
+            })
+
+```
+
+
+```{r monocle}
+atm <- readRDS(file.path("monocle", "pt_mono.rds"))
+```
+
+### plot pseudotime from monocle {.tabset }
+
+#### Pseudotime
+```{r ps}
+
+p <- plot_cell_trajectory(atm, color_by = "Pseudotime") +
+    scale_colour_viridis(discrete = F)
+
+p
+save_plot(file.path("monocle", "pseudotime.pdf"), p, base_height = 4)
+```
+
+#### Cell Type
+```{r lc, fig.width = 10}
+p <- plot_cell_trajectory(atm, color_by = "labeled_clusters", 
+                           cell_size = 0.1) +
+    scale_colour_brewer(palette = "Set1", name = "") + 
+    guides(colour = guide_legend(override.aes = list(size = 5))) + 
+    theme(legend.position = "right")
+
+## reorder to have proliferating on top
+## column 4 was named NA for unknown reasons
+colnames(p$data)[4] <- "unknown"
+
+
+plt_order <- c("Cell Cycle Arrest Type II",
+                                       "Naive Type I",
+                                       "Injured Type II",
+                                       "Transdifferentiating Type II",
+                                       "Proliferating Type II",
+               "Naive Type II")
+plt_dat <- p$data %>% 
+  mutate(labeled_clusters = factor(labeled_clusters,
+                                   levels = plt_order)) %>% 
+  left_join(data_frame(labeled_clusters = plt_order),
+            ., by = "labeled_clusters")
+ 
+set.seed(2)
+cols <- sample(brewer.pal(6, "Set1"), 6)
+p <- ggplot(plt_dat, aes(data_dim_1, data_dim_2)) + 
+  geom_point(aes(colour = labeled_clusters),
+             size  = 0.1) + 
+   scale_colour_manual(values = cols) + 
+    guides(colour = guide_legend(override.aes = list(size = 5))) + 
+    theme(legend.position = "right")
+
+save_plot(file.path("monocle", "pseudotime_celltype.pdf"), p, 
+          base_height = 4, base_aspect_ratio = 2)
+```
+
+#### pseudotime state
+```{r ps_state}
+p <- plot_cell_trajectory(atm, color_by = "State") +
+    scale_colour_viridis(discrete = T)
+
+p
+save_plot(file.path("monocle", "pseudotime_state.pdf"), p, base_height = 4)
+```
+
+#### Experiment
+```{r expt}
+p <- plot_cell_trajectory(atm, color_by = "expt") 
+
+p
+save_plot(file.path("monocle", "pseudotime_expt.pdf"), p, base_height = 4)
+```
+
+#### Experiment individually
+```{r}
+p <- plot_cell_trajectory(atm, color_by = "State") +
+    facet_wrap(~sample_names, nrow = 5) +
+    scale_colour_viridis(discrete = T)
+
+p
+
+save_plot(file.path("monocle", "tree_per_sample.pdf"), p, base_height = 10)
+```
+
+### Project onto TSNE
+
+```{r}
+ptime <- data.frame(cells = rownames(atm@phenoData@data),
+                    Pseudotime = atm@phenoData@data$Pseudotime,
+                    Pseudotime_state = atm@phenoData@data$State)
+ptime <- left_join(data_frame(cells = rownames(atcells@meta.data)),
+                   ptime, by = "cells")
+
+ptime[is.na(ptime)] <- -1    
+ptime <- as.data.frame(ptime)
+rownames(ptime) <- ptime[, 1]
+ptime[, 1] <- NULL
+
+atcells <- AddMetaData(atcells, ptime)
+
+atcells <- SetAllIdent(atcells, "Pseudotime_state")
+p <- plot_feature(atcells, "Pseudotime",
+         .cols = viridis::viridis(length(unique(atcells@ident))))
+
+save_plot(file.path("monocle", "ptime_tsne.pdf"), p)
+```
+
+
+## Slingshot
+
+```{r sshot}
+s_out_dir <- file.path(out_dir, "slingshot")
+
+dir.create(s_out_dir)
+
+library(slingshot)
+library(SingleCellExperiment)
+sce <- as.SingleCellExperiment(atcells)
+
+sce <- slingshot(sce, 
+                 clusterLabels = 'res.0.6', 
+                 reducedDim = 'PCA')
+
+colors <- colorRampPalette(brewer.pal(11, 'Spectral')[-6])(100)
+plot(reducedDims(sce)$TSNE, 
+    col = colors[cut(sce$slingPseudotime_2, 
+                      breaks=100)],
+     pch=16,
+     asp = 1)
+
+lines(SlingshotDataSet(sce), lwd=2)
+
+
+plot(reducedDims(sce)$TSNE, 
+    col = colors[cut(sce$slingPseudotime_2, 
+                      breaks=100)],
+     pch=16,
+     type = 'b')
+
+lines(SlingshotDataSet(sce), lwd=1, type = 'both')
+
+saveRDS(sce, file.path(s_out_dir, "slingshot_obj.rds"))
+```                 
+
+## AEC2 markers
+
+```{r}
+atcells <- SetAllIdent(atcells, "labeled_clusters")
+
+to_plot <- c("Proliferating Type II",
+                    "Cell Cycle Arrest Type II",
+                    "Transdifferentiating Type II")
+
+gene_list <- c(gene_lists$AEC2,
+               "Sftpb",
+               "Lpcat1")
+plt_list <- VlnPlot(atcells, gene_list, ident.include = to_plot, x.lab.rot = T, return.plotlist = T)
+
+plt <- plot_grid(plt_list)
+save_plot("aec2_markers.pdf", plt, nrow = 3, ncol =3, base_aspect_ratio = .75)
+```
