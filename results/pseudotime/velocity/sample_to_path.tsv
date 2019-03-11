@@ -1,0 +1,11 @@
+samples	paths
+ATI1expt1	/Users/kriemo/Projects/zemans/data/updated/20170623_zeemans/3161-ATII-1/outs/filtered_gene_bc_matrices/mm10
+ATI2expt1	/Users/kriemo/Projects/zemans/data/updated/20170623_zeemans/3161-ATII-2/outs/filtered_gene_bc_matrices/mm10
+ATII1expt1	/Users/kriemo/Projects/zemans/data/updated/20170623_zeemans/3161-ATII-3/outs/filtered_gene_bc_matrices/mm10
+ATIIinjured2expt1	/Users/kriemo/Projects/zemans/data/updated/20170623_zeemans/3162-ATII-5/outs/filtered_gene_bc_matrices/mm10
+ATIIinjured1expt1	/Users/kriemo/Projects/zemans/data/updated/20170623_zeemans/3162-ATTII-4/outs/filtered_gene_bc_matrices/mm10
+ATIIinjured1expt2	/Users/kriemo/Projects/zemans/data/updated/20170728_zeeman_expt2/3241ATII4/outs/filtered_gene_bc_matrices/mm10
+ATIIinjured2expt2	/Users/kriemo/Projects/zemans/data/updated/20170728_zeeman_expt2/3241ATII5/outs/filtered_gene_bc_matrices/mm10
+ATI1expt2	/Users/kriemo/Projects/zemans/data/updated/20170728_zeeman_expt2/3242ATI1/outs/filtered_gene_bc_matrices/mm10
+ATI2expt2	/Users/kriemo/Projects/zemans/data/updated/20170728_zeeman_expt2/3242ATI2/outs/filtered_gene_bc_matrices/mm10
+ATII1expt2	/Users/kriemo/Projects/zemans/data/updated/20170728_zeeman_expt2/3242ATII3/outs/filtered_gene_bc_matrices/mm10

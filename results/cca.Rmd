@@ -13,7 +13,6 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
 source("../R/globals.R")
-data_dir <- file.path(data_dir, "updated")
 processed_data_dir <- file.path(results_dir, "preprocess")
 
 main_outdir <- "revision"
@@ -22,7 +21,7 @@ dir.create(main_outdir, showWarnings = FALSE)
 
 ```{r load_dat}
 atcells <- readRDS(file.path(processed_data_dir, "s_obj_final.rds"))
-atcells <- SetAllIdent(atcells, "res.1.6")
+atcells <- SetAllIdent(atcells, "res.0.6")
 ```
 
 Split naive and injured type II into two seurats and attempt to align.

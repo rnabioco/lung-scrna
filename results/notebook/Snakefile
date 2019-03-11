@@ -11,7 +11,7 @@ rule build_site:
   """
   input:
     rmd = "index.Rmd",
-    htmls = os.path.join(RESULTS, "pseudotime.html"),
+    htmls = os.path.join(RESULTS, "cellbrowser.html"),
   output:
     os.path.join("_site", "index.html")
   log:
@@ -19,6 +19,38 @@ rule build_site:
   shell:
     """
     R -e "rmarkdown::render_site('{input.rmd}')"
+    """
+
+rule run_cellbrowser_markdown:
+  """
+  render cellbrowser Rmarkdown
+  """
+  input:
+   rmd =  os.path.join(RESULTS, "cellbrowser.Rmd"),
+   processing_rmd = os.path.join(RESULTS, "revision.html")
+  output:
+    os.path.join(RESULTS, "cellbrowser.html")
+  log:
+    "logs/cellbrowser.txt",
+  shell:
+    """
+    R -e "rmarkdown::render('{input.rmd}')"
+    """
+
+rule run_cca_markdown:
+  """
+  render cca Rmarkdown
+  """
+  input:
+   rmd =  os.path.join(RESULTS, "cca.Rmd"),
+   processing_rmd = os.path.join(RESULTS, "revision.html")
+  output:
+    os.path.join(RESULTS, "cca.html")
+  log:
+    "logs/cca.txt",
+  shell:
+    """
+    R -e "rmarkdown::render('{input.rmd}')"
     """
 
 rule run_figs_markdown:

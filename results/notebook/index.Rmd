@@ -16,3 +16,5 @@ Scripts and analysis for single cell RNA-Seq of lung epithelia in an injury reco
 [Markers and Gene set enrichment](../../markers.html) 
 [Pseudotime](../../pseudotime.html)   
 [Figure Code](../../revision.html)
+[CCA alignment](../../cca.html)
+[Cellbrowser generation](../../cellbrowser.html)

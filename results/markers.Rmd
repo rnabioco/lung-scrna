@@ -22,7 +22,6 @@ knitr::opts_chunk$set(cache.lazy = FALSE)
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
 source("../R/globals.R")
-data_dir <- file.path(data_dir, "updated")
 ```
 
 
@@ -77,7 +76,7 @@ atcells <- AddMetaData(atcells, m_df)
 
 
 ```{r id_tsne, fig.width = 14, fig.height = 10, fig.cap= "TSNE plot with each cell colored by the cluster id"}
-atcells <-SetAllIdent(atcells, "res.1.6")
+atcells <-SetAllIdent(atcells, "res.0.6")
 TSNEPlot(atcells,
          colors.use = viridis::viridis(25),
          do.return = F,
@@ -99,7 +98,7 @@ TSNEPlot(atcells,
 ### All clusters
 
 ```{r id_tsne1, fig.width = 14, fig.height = 10, fig.cap= "TSNE plot with each cell colored by the cluster id"}
-atcells <- SetAllIdent(atcells, "res.1.6")
+atcells <- SetAllIdent(atcells, "res.0.6")
 
 all_cluster_markers <- FindAllMarkers(atcells, 
                                   only.pos = TRUE,  
@@ -118,19 +117,13 @@ inj_clusters <- c("0",
                   "1",
                   "2",
                   "3",
-                  "4",
-                  "5",
-                  "6",
-                  "7",
-                  "9",
-                  "13",
-                  "14")
+                  "4")
 
-inj_cells <- rownames(atcells@meta.data)[atcells@meta.data$res.1.6 %in%
+inj_cells <- rownames(atcells@meta.data)[atcells@meta.data$res.0.6 %in%
                                            inj_clusters]
 
 tmp_dat <- SubsetData(atcells, cells.use = inj_cells)
-tmp_dat <- SetAllIdent(tmp_dat, "res.1.6")
+tmp_dat <- SetAllIdent(tmp_dat, "res.0.6")
 inj_cluster_markers <- FindAllMarkers(tmp_dat, 
                                   only.pos = TRUE,  
                                   min.pct = 0.25, 
@@ -142,6 +135,47 @@ write_tsv(inj_cluster_markers,
 rm(tmp_dat)
 gc()
 ```
+
+### All injured against naive type II
+
+```{r inj}
+inj_clusters <- c("0",
+                  "1",
+                  "2",
+                  "3",
+                  "4")
+
+inj_cells <- rownames(atcells@meta.data)[atcells@meta.data$res.0.6 %in%
+                                           inj_clusters]
+naive_type_ii <- rownames(atcells@meta.data)[atcells@meta.data$labeled_clusters == "Naive Type II"]
+
+selected_cells <- c(inj_cells, naive_type_ii)
+
+tmp_dat <- SubsetData(atcells, cells.use = selected_cells)
+tmp_dat <- SetAllIdent(tmp_dat, "res.0.6")
+
+
+inj_vs_naive_cluster_markers <- FindAllMarkers(tmp_dat, 
+                                  only.pos = TRUE,  
+                                  min.pct = 0.25, 
+                                  thresh.use = 0.25)
+
+names(inj_vs_naive_cluster_markers) <- paste0(inj_clusters,
+                                              "_vs_naive_AEC2")
+
+inj_vs_naive_cluster_markers <- map(inj_vs_naive_cluster_markers, 
+                                    as_tibble, 
+                                    rownames = "gene")
+
+mks_df <- bind_rows(inj_vs_naive_cluster_markers, .id = "comparison")
+
+write_tsv(mks_df,
+          file.path(outdir,
+            "injured_cluster_vs_naive_t2_markers_wilcox.txt"))
+rm(tmp_dat)
+gc()
+```
+
 
 ### All labeled cell types
 
@@ -270,6 +304,7 @@ injured_naive_markers <- FindMarkers(atcells,
 injured_naive_markers <- tibble::rownames_to_column(injured_naive_markers, 
                                                     "gene") 
 write_tsv(injured_naive_markers, file.path(outdir, "injured_vs_naive_markers_wilcox.txt"))
+
 ```
 
 
@@ -322,6 +357,36 @@ write_tsv(td_markers, file.path(outdir, "td_markers_wilcox.txt"))
 ```
 
 
+```{r check_on_at2stem}
+atstems <- atcells@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  mutate(atstem_classes = ifelse(str_detect(new_expt_id,
+                                            "^ATII expt.") & 
+                                   labeled_clusters == "Proliferating Type II",
+         "at2_naive_prolif",
+         ifelse(str_detect(new_expt_id,
+                           "^ATII-injured") & 
+                                   labeled_clusters == "Proliferating Type II",
+         "at2_injured_prolif",
+         NA))) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell")
+
+atstem_cells <- SubsetData(atcells, cells.use = rownames(na.omit(atstems)))
+atstem_cells <- AddMetaData(atstem_cells, atstems[, "atstem_classes", drop = F])
+atstem_cells <- SetAllIdent(atstem_cells, "atstem_classes")
+
+atstem_markers <- FindMarkers(atstem_cells, 
+                              ident.1 = "at2_naive_prolif", 
+                              ident.2 = "at2_injured_prolif") %>% 
+  tibble::rownames_to_column("gene")
+
+write_tsv(atstem_markers, file.path("markers", "atstem_markers.txt"))
+openxlsx::write.xlsx(atstem_markers, 
+                     file.path("markers",
+                               "atstem_markers.xlsx"))
+
+```
 
 ## Marker Tables
 
@@ -658,9 +723,10 @@ openxlsx::write.xlsx(c(readme_sheet, list_of_markers),
 
 ```{r injuredvnaive_aec2}
 markers <- read_tsv(file.path("markers",
-                          "injured_vs_naive_markers_wilcox.txt"))
+                          "injured_cluster_vs_naive_t2_markers_wilcox.txt"))
 
 markers <- set_xlsx_class(markers, "gene", "Text")
+markers <- split(markers, markers$comparison)
 
 readme_sheet <- data_frame(
   Columns = c(
@@ -687,11 +753,10 @@ readme_sheet <- data_frame(
   "gene name"
 ))
 
-readme_sheet <- list(README = readme_sheet,
-                     `Injured AEC2 versus Naive AEC2` = markers)
+readme_sheet <- list(README = readme_sheet)
 
-openxlsx::write.xlsx(readme_sheet, 
-                     file.path("markers","markers_per_naive_typeii_vs_injured.xlsx"))
+openxlsx::write.xlsx(c(readme_sheet, markers),
+                     file.path("markers","markers_per_naive_typeii_vs_each_injured_cluster.xlsx"))
 
 ```
 
@@ -728,6 +793,50 @@ readme_sheet <- data_frame(
   "Bonferroni corrected p-value",
   "cluster name",
   "gene name"
+))
+
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers), 
+                     file.path("markers",
+                               "markers_per_td_populations_injured_downregulated.xlsx"))
+```
+
+
+```{r naive_v_injured_clusters}
+
+markers <- read_tsv(file.path("markers", 
+                    "td_injured_posneg_markers_wilcox.txt")) %>% 
+  filter(avg_logFC < 0)
+
+list_of_markers <- split(markers, markers$cluster)
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between injured AEC2 clusters and Naive AEC2 cluster",
+  "",
+  "Columns",
+  "comparison",
+  "gene",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj"
+), Description = c(
+  "",
+  "",
+  "clusters tested against naive AEC2",
+  "gene name",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value"
 ))
 
 readme_sheet <- list(README = readme_sheet)
@@ -991,6 +1100,9 @@ filter_cell_surface <- function(df, cell_surface_markers, uniprot) {
     ungroup()
 }
 
+
+markers <- read_tsv(file.path("markers", 
+                              "td_injured_markers_wilcox.txt")) 
 
 filter_cell_surface(markers, 
           cell_surface_markers, 

@@ -21,7 +21,7 @@ knitr::opts_chunk$set(warning = FALSE)
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
 source("../R/globals.R")
-data_dir <- file.path(data_dir, "updated")
+#data_dir <- file.path(data_dir, "updated")
 ```
 
 ## Experiment Summary
@@ -54,7 +54,7 @@ Experment | Sample | Description
 ```{r downsampled}
 
 sample_paths_exp2 <-  file.path(data_dir ,
-                               "20170728_zeeman_expt2", 
+                               "expt2", 
                                "aggregated_all_expts",
                                "outs",
                                "filtered_gene_bc_matrices_mex",
@@ -393,7 +393,7 @@ samples <- c(
   "3162-ATTII-4")
 
 sample_paths_exp1 <- file.path(data_dir ,
-                               "20170623_zeemans", 
+                               "expt1", 
                                samples,
                                "outs", "filtered_gene_bc_matrices", "mm10")
       
@@ -407,7 +407,7 @@ samples <- c(
   "3242ATII3")
 
 sample_paths_exp2 <-  file.path(data_dir ,
-                               "20170728_zeeman_expt2", 
+                               "expt2", 
                                samples,
                                "outs", "filtered_gene_bc_matrices", "mm10")
 
@@ -625,9 +625,9 @@ VlnPlot(atcells, "proportion.mito",
 ### GFP counts
 ```{r read_in_counts, message = F, eval = T}
 
-expt1_files <- dir(file.path(data_dir, "20170623_zeemans"),
+expt1_files <- dir(file.path(data_dir, "expt1"),
     pattern = "*_sorted_counts.txt", full.names = T, recursive = T)
-expt2_files <- dir(file.path(data_dir, "20170728_zeeman_expt2"),
+expt2_files <- dir(file.path(data_dir, "expt2"),
     pattern = "*_sorted_counts.txt", full.names = T, recursive = T)
 
 files <- c(expt1_files, expt2_files)
@@ -697,7 +697,9 @@ atcells <- NormalizeData(atcells,
 ```{r add_in_prev_data}
 
 atcells@dr <- atcells_dr
-clust_ids <- norm_metadata[, "res.1.6", drop = F]
+clust_ids <- norm_metadata[,
+                      str_subset(colnames(norm_metadata), 
+                                 "res"),]
 atcells <- AddMetaData(atcells, clust_ids)
 ```
 
@@ -771,7 +773,7 @@ FeaturePlot(atcells, "proportion.mito", no.legend = F)
 ## Clusters
 
 ```{r clusters}
-atcells <- SetAllIdent(atcells, "res.1.6")
+atcells <- SetAllIdent(atcells, "res.0.6")
 TSNEPlot(atcells, do.label = T)
 
 ```
@@ -871,49 +873,33 @@ FeaturePlot(atcells, transdiff, pt.size = .25)
 
 Based on these data I proposed the following classification (TSNE plotted again below):
 
-Endothelial | 18
-Basal | 11
-Club | 15 19
-Ciliary | 21
-Macrophages | 17
-Naive Type I | 20
-Naive Type II | 8
-Injured Type II | 0 1 2 3 4 5 6 7 10 15
-Transdifferentiating Type II | 10
-Proliferating Type II | 16
-Cell Cycle Arrest Type II | 12
   
 ```{r, fig.width = 16, fig.height = 16}
 
 rename_ids <- tibble::tribble(
   ~cluster, ~labeled_clusters,
-  "8", "Naive Type II",
+  "5", "Naive Type II",
   "0", "Injured Type II",
   "1", "Injured Type II",
   "2", "Injured Type II",
   "3", "Injured Type II",  
   "4", "Injured Type II",
-  "5", "Injured Type II",
-  "6", "Injured Type II",
-  "7", "Injured Type II",
-  "9", "Injured Type II",
-  "13", "Injured Type II",
-  "14", "Injured Type II",
-  "10", "Transdifferentiating Type II",
-  "12", "Cell Cycle Arrest Type II",
-  "11", "Basal",
-  "15", "Club",
-  "16", "Proliferating Type II",
-  "17", "Macrophages",
-  "19", "Club",
-  "18", "Endothelial", 
-  "20", "Naive Type I",
-  "21", "Ciliary"
+  "6", "Transdifferentiating Type II",
+  "8", "Cell Cycle Arrest Type II",
+  "7", "Basal",
+  "13", "Club",
+  "10", "Proliferating Type II",
+  "11", "Macrophages",
+  "9", "Club",
+  "12", "Endothelial", 
+  "14", "Naive Type I",
+  "15", "Ciliary"
 )
+
 stopifnot(length(unique(rename_ids$cluster)) == nrow(rename_ids))
 
 ids <- data_frame(cell = rownames(atcells@meta.data),
-                  cluster = atcells@meta.data$res.1.6)
+                  cluster = atcells@meta.data$res.0.6)
 new_ids <- left_join(ids, rename_ids, 
                      by = "cluster") %>% 
   dplyr::select(-cluster)

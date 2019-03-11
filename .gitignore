@@ -2,3 +2,14 @@
 .Rhistory
 .RData
 .Ruserdata
+data/
+docs/
+*/final_files/
+revision_1/
+*.pdf
+*.html
+*.xlsx
+*.rds
+*.loom
+*.hdf5
+*.gz

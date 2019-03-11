@@ -19,6 +19,8 @@ library(doParallel)
 library(itertools)
 library(gridExtra)
 library(here)
+
+theme_set(theme_cowplot())
 #### Paths ####
 
 project_dir <- here()
@@ -28,10 +30,10 @@ docs_dir <- file.path(project_dir, "docs")
 db_dir <- file.path(project_dir, "dbases")
 
 # vector of figure paths
-figs_dir <-  file.path(results_dir, "Figures") %>%
-  dir(pattern = "Figure_[1-4]$",
-      include.dirs = TRUE,
-      full.names = T)
+# figs_dir <-  file.path(results_dir, "Figures") %>%
+#   dir(pattern = "Figure_[1-4]$",
+#       include.dirs = TRUE,
+#       full.names = T)
 
 
 ##### Functions ####
@@ -628,12 +630,13 @@ tsne_by_sample_type <- function(seurat_obj, .gene, cell_sets,
         limit_setting +
         labs(title = top_label[i]) +
         plt_theme
-      plts[[i + 1]] <- g_legend(tmp)
+      plts[[i + 1]] <- NULL
+      plts[[i + 2]] <- g_legend(tmp)
     }
   }
 
   plot_grid(plotlist = plts, nrow = 1,
-            rel_widths = c(rep(1, length(cell_sets)), .33))
+            rel_widths = c(rep(1, length(cell_sets)), 0.1, 0.23))
 }
 
 
