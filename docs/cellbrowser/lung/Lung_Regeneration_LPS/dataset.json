@@ -1,0 +1,438 @@
+{
+  "desc": {
+    "summary": "summary.html",
+    "downloads": "downloads.html"
+  },
+  "name": "Lung_Regeneration_LPS",
+  "shortLabel": "Lung_Regeneration_LPS",
+  "clusterField": "cell_types",
+  "fileVersions": {
+    "inMeta": {
+      "fname": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/revision_2/cellbrowser/Lung_Regeneration_LPS/meta.tsv",
+      "md5": "530a7d2a6813a863cfaec0b27fa0e890",
+      "size": 1305520,
+      "mtime": "2019-02-28 22:55:20"
+    },
+    "outMeta": {
+      "fname": "lung/Lung_Regeneration_LPS/meta.tsv",
+      "md5": "530a7d2a6813a863cfaec0b27fa0e890",
+      "size": 1305520,
+      "mtime": "2019-02-28 22:59:26"
+    },
+    "inMatrix": {
+      "fname": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/revision_2/cellbrowser/Lung_Regeneration_LPS/exprMatrix.tsv.gz",
+      "md5": "3beba1370054c88a865b98f01f5e57a3",
+      "size": 28654990,
+      "mtime": "2019-02-28 22:55:20"
+    },
+    "outMatrix": {
+      "fname": "lung/Lung_Regeneration_LPS/exprMatrix.tsv.gz",
+      "md5": "cb8cad6eca69078f3a2082ee57039bfe",
+      "size": 22455999,
+      "mtime": "2019-02-28 23:02:30"
+    }
+  },
+  "sampleCount": 11020,
+  "matrixWasFiltered": true,
+  "metaFields": [
+    {
+      "name": "Cell",
+      "label": "Cell",
+      "type": "uniqueString",
+      "maxSize": 34,
+      "diffValCount": 11020
+    },
+    {
+      "name": "genespercell",
+      "label": "genes per cell",
+      "binMethod": "quantiles",
+      "binCounts": [
+        387,
+        765,
+        1351,
+        1967,
+        2276,
+        1810,
+        1119,
+        640,
+        417,
+        288
+      ],
+      "breaks": [
+        114,
+        1018,
+        1299,
+        1551,
+        1802,
+        2053,
+        2304,
+        2560,
+        2840,
+        3245,
+        6079
+      ],
+      "arrType": "uint8",
+      "type": "int",
+      "diffValCount": 2512
+    },
+    {
+      "name": "UMIspercell",
+      "label": "UMIs per cell",
+      "binMethod": "quantiles",
+      "binCounts": [
+        871,
+        1091,
+        1334,
+        1366,
+        1386,
+        1284,
+        1155,
+        967,
+        839,
+        727
+      ],
+      "breaks": [
+        1135,
+        3545,
+        4665,
+        5588,
+        6468,
+        7349,
+        8276,
+        9340,
+        10687,
+        12890,
+        46788
+      ],
+      "arrType": "uint8",
+      "type": "int",
+      "diffValCount": 6942
+    },
+    {
+      "name": "condition",
+      "label": "condition",
+      "type": "enum",
+      "valCounts": [
+        [
+          "Injured AEC2",
+          9575
+        ],
+        [
+          "Naive Non-AEC2 Epithelial",
+          766
+        ],
+        [
+          "Naive AEC2",
+          679
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 3
+    },
+    {
+      "name": "technicalreplicate",
+      "label": "technical_replicate",
+      "type": "enum",
+      "valCounts": [
+        [
+          "1",
+          5747
+        ],
+        [
+          "2",
+          5273
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 2
+    },
+    {
+      "name": "GFPexpression",
+      "label": "GFP expression",
+      "binMethod": "quantiles",
+      "binCounts": [
+        3384,
+        3505,
+        2136,
+        1109,
+        510,
+        196,
+        100,
+        42,
+        22,
+        16
+      ],
+      "breaks": [
+        0.0,
+        0.395184145758961,
+        0.677685826611635,
+        0.885287698185518,
+        1.06758217567982,
+        1.22171351270123,
+        1.35523039797583,
+        1.47300214999232,
+        1.58458368377968,
+        1.72891514045729,
+        2.27769049411359
+      ],
+      "arrType": "uint8",
+      "type": "float",
+      "diffValCount": 158
+    },
+    {
+      "name": "proporitionofUMIsasmitochondria",
+      "label": "proporition of UMIs as mitochondria",
+      "binMethod": "quantiles",
+      "binCounts": [
+        1095,
+        1096,
+        1105,
+        1101,
+        1114,
+        1100,
+        1112,
+        1103,
+        1102,
+        1092
+      ],
+      "breaks": [
+        0.00112570356472795,
+        0.0163592064044553,
+        0.0191330343796712,
+        0.0214868929952729,
+        0.0238117384429355,
+        0.0261725835708733,
+        0.0288753799392097,
+        0.032001514864609,
+        0.0359250032778288,
+        0.0411522633744856,
+        0.0504710632570659
+      ],
+      "arrType": "uint8",
+      "type": "float",
+      "diffValCount": 10859
+    },
+    {
+      "name": "clusters",
+      "label": "clusters",
+      "type": "enum",
+      "valCounts": [
+        [
+          "0",
+          2581
+        ],
+        [
+          "1",
+          1719
+        ],
+        [
+          "2",
+          1583
+        ],
+        [
+          "3",
+          1436
+        ],
+        [
+          "4",
+          1411
+        ],
+        [
+          "5",
+          616
+        ],
+        [
+          "6",
+          350
+        ],
+        [
+          "7",
+          332
+        ],
+        [
+          "8",
+          309
+        ],
+        [
+          "9",
+          250
+        ],
+        [
+          "10",
+          119
+        ],
+        [
+          "11",
+          108
+        ],
+        [
+          "12",
+          77
+        ],
+        [
+          "13",
+          59
+        ],
+        [
+          "14",
+          51
+        ],
+        [
+          "15",
+          19
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 16
+    },
+    {
+      "name": "celltypes",
+      "label": "cell_types",
+      "type": "enum",
+      "valCounts": [
+        [
+          "Other Injured AEC2",
+          8730
+        ],
+        [
+          "Naive AEC2",
+          616
+        ],
+        [
+          "Injured AEC2: Transdifferentiating",
+          350
+        ],
+        [
+          "Basal",
+          332
+        ],
+        [
+          "Club",
+          309
+        ],
+        [
+          "Injured AEC2: Cell Cycle Arrest",
+          309
+        ],
+        [
+          "Injured AEC2: Proliferating",
+          119
+        ],
+        [
+          "Macrophage",
+          108
+        ],
+        [
+          "Endothelial/Fibroblast",
+          77
+        ],
+        [
+          "Naive AEC1",
+          51
+        ],
+        [
+          "Ciliated",
+          19
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 11
+    },
+    {
+      "name": "Cluster",
+      "label": "Cluster",
+      "type": "enum",
+      "valCounts": [
+        [
+          "0",
+          2581
+        ],
+        [
+          "1",
+          1719
+        ],
+        [
+          "2",
+          1583
+        ],
+        [
+          "3",
+          1436
+        ],
+        [
+          "4",
+          1411
+        ],
+        [
+          "5",
+          616
+        ],
+        [
+          "6",
+          350
+        ],
+        [
+          "7",
+          332
+        ],
+        [
+          "8",
+          309
+        ],
+        [
+          "9",
+          250
+        ],
+        [
+          "10",
+          119
+        ],
+        [
+          "11",
+          108
+        ],
+        [
+          "12",
+          77
+        ],
+        [
+          "13",
+          59
+        ],
+        [
+          "14",
+          51
+        ],
+        [
+          "15",
+          19
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 16
+    }
+  ],
+  "matrixArrType": "Uint32",
+  "labelField": "cell_types",
+  "coords": [
+    {
+      "name": "coords_0",
+      "shortLabel": "Seurat tsne",
+      "minX": -46.9610193759639,
+      "maxX": 38.2086699890326,
+      "minY": -52.4795217322958,
+      "maxY": 51.9308177745968,
+      "type": "Float32"
+    },
+    {
+      "name": "coords_1",
+      "shortLabel": "Seurat pca",
+      "minX": -84.6566218157774,
+      "maxX": 27.649809670886,
+      "minY": -52.3292625735152,
+      "maxY": 31.8675323004681,
+      "type": "Float32"
+    }
+  ],
+  "markers": []
+}
