@@ -3,6 +3,10 @@
 // and expression data (string -> float, one mapping per circle)
 
 /* jshint -W097 */
+/* jshint -W117 */  // don't complain about unknown classes, like Set()
+/* jshint -W104 */  // allow 'const' 
+/* jshint -W069 */  // object access with ["xx"]
+ 
 "use strict";
 
 var cellbrowser = function() {
@@ -16,6 +20,10 @@ var cellbrowser = function() {
 
     // object with all information needed to map to the legend colors
     var gLegend = null;
+
+    // optional second legend, for split screen mode
+    var gOtherLegend = null;
+
     // all info about the current legend. gLegend.rows is:
     // [ colorHexStr, defaultColorHexStr, label, count, internalKey, uniqueKey ]
     // internalKey can be int or str, depending on current coloring mode.
@@ -24,15 +32,13 @@ var cellbrowser = function() {
     // uniqueKey is used to save manually defined colors to localStorage
 
     var renderer = null;
-    var renderer2 = null; // for split screen mode
-    var gWinInfo = null; // .width and .height of the PIXI canvas
 
     // last 10 genes
     var gRecentGenes = [];
 
     // -- CONSTANTS
     var gTitle = "UCSC Cell Browser";
-    const COL_PREFIX = "col_";
+    var COL_PREFIX = "col_";
 
     // depending on the type of data, single cell or bulk RNA-seq, we call a circle a
     // "sample" or a "cell". This will adapt help menus, menus, etc.
@@ -54,7 +60,8 @@ var cellbrowser = function() {
     // position of first combobox in toolbar from left, in pixels
     var toolBarComboLeft = metaBarWidth;
     var toolBarComboTop   = 2;
-    var datasetComboWidth = 200;
+    // width of the collection combobox
+    var collectionComboWidth = 200;
     var layoutComboWidth = 150;
     // width of a single gene cell in the meta gene bar tables
     var gGeneCellWidth = 66;
@@ -65,12 +72,15 @@ var cellbrowser = function() {
     // color for missing value when coloring by expression value
     //var cNullColor = "CCCCCC";
     //const cNullColor = "DDDDDD";
-    const cNullColor = "87CEFA";
+    const cNullColor = "95DFFF";
 
-    const cDefGradPalette = "tol-sq";  // default legend gradient palette for numeric ranges
+    const cDefGradPalette = "tol-sq-blue";  // default legend gradient palette for gene expression
+    // this is a special palette, tol-sq with the first entry being a light blue, so 0 stands out a bit more
+    const cDefGradPaletteHeat = "tol-sq";  // default legend gradient palette for the heatmap
     const cDefQualPalette  = "rainbow"; // default legend palette for categorical values
 
     const exprBinCount = 10; //number of expression bins for genes
+    // has to match cbData.js.exprBinCount - TODO - share the constant between these two files
 
     var HIDELABELSNAME = "Hide labels";
     var SHOWLABELSNAME = "Show labels";
@@ -94,7 +104,7 @@ var cellbrowser = function() {
         "BrainSpMouseDev" : "http://developingmouse.brain-map.org/gene/show/", // internal Brainspan ID
         "Eurexp" : "http://www.eurexpress.org/ee/databases/assay.jsp?assayID=", // internal ID
         "LMD" : "http://www.brainspan.org/lcm/search?exact_match=true&search_type=gene&search_term=" // entrez
-    }
+    };
 
     var DEBUG = true;
 
@@ -102,6 +112,23 @@ var cellbrowser = function() {
     /* for debugging */
         console.log(JSON.stringify(o));
     }
+
+    function formatString (str) {
+        /* Stackoverflow code https://stackoverflow.com/a/18234317/233871 */
+        /* "a{0}bcd{1}ef".formatUnicorn("foo", "bar"); // yields "aFOObcdBARef" */
+            if (arguments.length) {
+                var t = typeof arguments[0];
+                var key;
+                var args = ("string" === t || "number" === t) ?
+                    Array.prototype.slice.call(arguments)
+                    : arguments[0];
+    
+                for (key in args) {
+                    str = str.replace(new RegExp("\\{" + key + "\\}", "gi"), args[key]);
+                }
+            }
+            return str;
+        }
 
     function debug(msg, args) {
         if (DEBUG) {
@@ -124,6 +151,44 @@ var cellbrowser = function() {
         return a.slice();
     }
 
+    function copyNonNull(srcArr, trgArr) {
+    /* copy non-null values to trgArr */
+        if (srcArr.length!==trgArr.length)
+            alert("warning - copyNonNull - target and source array have different sizes.");
+
+        for (var i = 0; i < srcArr.length; i++) {
+            if (srcArr[i]!==null)
+                trgArr[i] = srcArr[i];
+        }
+        return trgArr;
+    }
+
+    function isEmpty(obj) {
+        for(var key in obj) {
+            if(obj.hasOwnProperty(key))
+                return false;
+        }
+        return true;
+    }
+
+    function allEmpty(arr) {
+        /* return true if all members of array are white space only strings */
+        var newArr = arr.filter(function(str) { return /\S/.test(str); });
+        return (newArr.length===0);
+    }
+
+    function copyNonEmpty(srcArr, trgArr) {
+    /* copy from src to target array if value is not "". Just return trgArr is srcArr is null or lengths don't match.  */
+        if (!srcArr || (srcArr.length!==trgArr.length))
+            return trgArr;
+
+        for (var i = 0; i < srcArr.length; i++) {
+            if (srcArr[i]!=="")
+                trgArr[i] = srcArr[i];
+        }
+        return trgArr;
+    }
+
     function keys(o) {
     /* return all keys of object as an array */
         var allKeys = [];
@@ -135,29 +200,38 @@ var cellbrowser = function() {
         return s[0].toUpperCase() + s.slice(1);
     }
 
-    function findMetaInfo(findName) {
-    /* return meta info field with name, add 'metaIndex' attribute  */
-        var metaFieldInfo = db.conf.metaFields;
-        for (var i = 0; i < metaFieldInfo.length; i++) {
-            var metaInfo = metaFieldInfo[i];
-            if (metaInfo.name===findName) {
-                metaInfo.index = i;
-                return metaInfo;
-            }
-        }
-        return null;
-    }
-
-    function findMetaValIndex(fieldIdx, value) {
+    
+    function findMetaValIndex(metaInfo, value) {
         /* return the index of the value of an enum meta field */
-        var valCounts = db.conf.metaFields[fieldIdx].valCounts;
+        var valCounts = metaInfo.valCounts;
         for (var valIdx = 0; valIdx < valCounts.length; valIdx++) {
             if (valCounts[valIdx][0]===value)
                 return valIdx;
         }
     }
 
-    function cartSave(key, value, defaultValue) {
+    function intersectArrays(arrList) {
+        /* return the intersection of all arrays as an array. Non-IE11? */
+        var smallSet = new Set(arrList[0]);
+        for (var i=1; i < arrList.length; i++) {
+            var otherSet = new Set(arrList[i]);
+            smallSet = new Set([...smallSet].filter(x => otherSet.has(x)));
+        }
+        var newArr = Array.from(smallSet);
+        // alternative without spread:
+        //function intersection(setA, setB) {
+          //  var _intersection = new Set();
+          //  for (var elem of setB) {
+          //      if (setA.has(elem)) {
+          //          _intersection.add(elem);
+          //      }
+          //  }
+          //  return _intersection;
+        //}
+        return newArr;
+    }
+
+    function saveToUrl(key, value, defaultValue) {
     /* save a value in both localStorage and the URL. If the value is defaultValue or null, remove it */
         if (value===defaultValue || value===null) {
             localStorage.removeItem(key);
@@ -169,32 +243,17 @@ var cellbrowser = function() {
         }
     }
 
-    function cartGet(key, defaultValue) {
+    function getFromUrl(key, defaultValue) {
     /* get a value from localStorage or the current URL or return the default if not defined in either place.
      * The URL overrides localStorage. */
         var val = localStorage.getItem(key);
         if (val===null && defaultValue!==undefined)
             val = defaultValue;
         val = getVar(key, val);
-        return val
+        return val;
     }
 
-    function formatString (str) {
-    /* Stackoverflow code https://stackoverflow.com/a/18234317/233871 */
-    /* "a{0}bcd{1}ef".formatUnicorn("foo", "bar"); // yields "aFOObcdBARef" */
-        if (arguments.length) {
-            var t = typeof arguments[0];
-            var key;
-            var args = ("string" === t || "number" === t) ?
-                Array.prototype.slice.call(arguments)
-                : arguments[0];
 
-            for (key in args) {
-                str = str.replace(new RegExp("\\{" + key + "\\}", "gi"), args[key]);
-            }
-        }
-        return str;
-    }
 
     function copyToClipboard(element) {
     /* https://stackoverflow.com/questions/22581345/click-button-copy-to-clipboard-using-jquery */
@@ -220,7 +279,13 @@ var cellbrowser = function() {
 
     function activateTooltip(selector) {
         // noconflict in html, I had to rename BS's tooltip to avoid overwrite by jquery
-        var ttOpt = {"html": true, "animation": false, "delay":{"show":350, "hide":100}, container:"body"};
+        var ttOpt = {
+            "html": true, 
+            "animation": false, 
+            "delay": {"show":300, "hide":100}, 
+            "trigger" : "hover",
+            container:"body"
+        };
         $(selector).bsTooltip(ttOpt);
     }
 
@@ -234,25 +299,10 @@ var cellbrowser = function() {
          $(idStr).parent().removeClass("disabled").css("pointer-events", '');
     }
 
-    function updateToolbar() {
-    /* update the toolbar with the current dataset info */
-        var geneList = [];
-
-        for(var key in gCurrentDataset.matrixOffsets) {
-            geneList.push({id:key, text:key});
-        }
-
-        //$('#tpGeneCombo').select2({
-            //placeholder : "Gene Symbol",
-            //ajax : {},
-            //dataAdapter : RefAdapter,
-        //});
-    }
-
     function updateMenu() {
     /* deactivate menu options based on current variables */
      // the "hide selected" etc menu options are only shown if some cells are selected
-     if (renderer.selCells===null) {
+     if (renderer.selCells.length===0) {
          menuBarHide("#tpOnlySelectedButton");
          menuBarHide("#tpFilterButton");
      }
@@ -281,26 +331,44 @@ var cellbrowser = function() {
 
     function prettyNumber(/*int*/ count) /*str*/ {
         /* convert a number to a shorter string, e.g. 1200 -> 1.2k, 1200000 -> 1.2M, etc */
+        var f = count;
+
         if (count>1000000) {
-            var f = (count / 1000000);
+            f = (count / 1000000);
             return f.toFixed(1)+"M";
         }
         if (count>10000) {
-            var f = (count / 1000);
+            f = (count / 1000);
             return f.toFixed(0)+"k";
         }
         if (count>1000) {
-            var f = (count / 1000);
+            f = (count / 1000);
             return f.toFixed(1)+"k";
         }
 
-        return count;
+        return f;
     }
 
-    function openDatasetLoadPane(selDatasetIdx) {
+    function addMd5(url, md5s, key) {
+        /* lookup key in md5s and add value to url separate by ? */
+        if (md5s && md5s[key])
+            url += "?"+md5s[key];
+        return url;
+    }        
+
+    function preloadImage(url) {
+        let img= new Image();
+        img.src = url;
+    }
+
+    function openDatasetLoadPane(datasetInfo) {
         /* open dataset dialog: load html into the three panes  */
-        var datasetName = gDatasetList[selDatasetIdx].name;
+        //var datasetName = datasetInfo.name;
+        //var md5 = datasetInfo.md5;
         // the UCSC apache serves latin1, so we force it back to utf8
+        var thumbUrl = joinPaths([datasetInfo.name, "thumb.png"]);
+        preloadImage(thumbUrl); // many datasets have thumb.png, so preload it now
+
         $.ajaxSetup({
             'beforeSend' : function(xhr) {
                 if (xhr && xhr.overrideMimeType)
@@ -308,51 +376,261 @@ var cellbrowser = function() {
             },
         });
 
-        var descUrl = joinPaths([datasetName, "summary.html"]);
-        $("#pane1").load(descUrl, function( response, status, xhr ) {
-            if ( status === "error" ) {
-                $( "#pane1" ).html("File "+descUrl+" was not found");
-            }
-            $("#tabLink1").tab("show");
-        });
+        //if (datasetInfo.datasetCount!==undefined) {
+            //$("#tabLink2").hide();
+            //$("#tabLink3").hide();
+        //} else {
+            //$("#tabLink2").show();
+            //$("#tabLink3").show();
+        //}
 
-        var methodsUrl = joinPaths([datasetName, "methods.html"]);
-        $("#pane2").load(methodsUrl, function( response, status, xhr ) {
-            if ( status === "error" ) {
-                $( "#pane2" ).html("File "+methodsUrl+" was not found");
-            }
-        });
+        let datasetName = datasetInfo.name;
+        let md5 = datasetInfo.md5;
+        if (datasetInfo.hasFiles && datasetInfo.hasFiles.indexOf("datasetDesc")!==-1) {
+            // description is not through html files but a json file
+            var jsonUrl = joinPaths([datasetName, "desc.json"]) +"?"+md5;
+            fetch(jsonUrl)
+              .then(function(response) {
+                return response.json();
+              })
+              .then(function(desc) { 
+                  datasetDescToHtml(datasetInfo, desc); 
+              });
+        } else {
+            // for older datasets that don't have .json descriptors yet
+            var descUrl = joinPaths([datasetName, "summary.html"]) +"?"+md5;
+            $("#pane1").load(descUrl, function( response, status, xhr ) {
+                if ( status === "error" ) {
+                    $( "#pane1" ).html("File "+descUrl.split("?")[0]+" was not found");
+                }
+                $("#tabLink1").tab("show");
+            });
 
-        var downloadUrl = joinPaths([datasetName, "downloads.html"]);
-        $("#pane3").load(downloadUrl, function( response, status, xhr ) {
-            if ( status === "error" ) {
-                $( "#pane3" ).html("File "+downloadUrl+" was not found");
-            }
-        });
+            var methodsUrl = joinPaths([datasetName, "methods.html"]) +"?"+md5;
+            $("#pane2").load(methodsUrl, function( response, status, xhr ) {
+                if ( status === "error" ) {
+                    $( "#pane2" ).html("File "+methodsUrl.split("?")[0]+" was not found");
+                }
+            });
+
+            var downloadUrl = joinPaths([datasetName, "downloads.html"]) +"?"+md5;
+            $("#pane3").load(downloadUrl, function( response, status, xhr ) {
+                if ( status === "error" ) {
+                    $( "#pane3" ).html("File "+downloadUrl.split("?")[0]+" was not found");
+                }
+            });
+        }
     }
 
-    function openDatasetDialog() {
-    /* build dataset open dialog */
+    let descLabels = {
+        "paper_url":"Publication",
+        "other_url" : "Website",
+        "geo_series" : "NCBI GEO Series", // = CIRM tagsV5
+        "sra" : "NCBI Short Read Archive",
+        "pmid" : "PubMed Abstract",
+        "pmcid" : "PubMed Fulltext",
+        "sra_study" : "NCBI SRA Study",
+        "bioproject" : "NCBI Bioproject",
+        "dbgap" : "NCBI DbGaP",
+        "biorxiv_url" : "BioRxiv preprint",
+        "doi" : "Publication Fulltext",
+        "arrayexpress" : "ArrayExpress",
+        "ena_project" : "European Nucleotide Archive",
+    };
 
-        var winWidth = window.innerWidth - 0.05*window.innerWidth;
-        var winHeight = window.innerHeight - 0.05*window.innerHeight;
-        var buttonWidth = 400;
-        var tabsWidth = winWidth - buttonWidth - 70;
-        var listGroupHeight = winHeight - 100;
+    let descUrls = {
+        "geo_series" : "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=",
+        "sra_study" : "https://trace.ncbi.nlm.nih.gov/Traces/sra/?study=",
+        "bioproject" : "https://www.ncbi.nlm.nih.gov/bioproject/",
+        "pmid" : "https://www.ncbi.nlm.nih.gov/pubmed/",
+        "pmcid" : "https://www.ncbi.nlm.nih.gov/pmc/articles/",
+        "dbgap" : "https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/study.cgi?study_id=",
+        "doi" : "http://dx.doi.org/",
+        "ena_project" : "https://www.ebi.ac.uk/ena/data/view/",
+        "arrayexpress" : "https://www.ebi.ac.uk/arrayexpress/experiments/",
+    }
+
+    function htmlAddLink(htmls, desc, key) {
+        /* add a link to html on a new line. if desc[key] includes a space, the part after it is the link name. */
+        if (!desc[key])
+            return;
+
+        let label = descLabels[key];
+        htmls.push("<b>");
+        htmls.push(label);
+        htmls.push(": </b>");
+        htmls.push("<a target=_blank href='");
+
+        let url = desc[key].toString();
+        let urlLabel = url;
+        let spcPos = url.indexOf(" ");
+        if (spcPos!==-1) {
+            urlLabel = url.slice(spcPos+1);
+            url = url.slice(0,spcPos);
+        }
+            
+        if (!url.startsWith("http"))
+            url = descUrls[key]+url;
+
+        htmls.push(url);
+        htmls.push("'>");
+        htmls.push(urlLabel);
+        htmls.push("</a><br>");
+    }
+
+    function datasetDescToHtml(datasetInfo, desc) {
+        /* given an object with keys title, abstract, pmid, etc, fill the dataset description tabs with html */
+        let htmls = [];
+        if (desc.title) {
+            htmls.push("<h4>");
+            htmls.push(desc.title);
+            htmls.push("</h4>");
+        }
+        if (desc.image) {
+            htmls.push("<img style='float:right; padding-left:5px' src='");
+            htmls.push(datasetInfo.name+"/"+desc.image[0]+"'");
+            htmls.push(" width='"+desc.image[1]+"' height='"+desc.image[2]+"'>");
+        }
+
+        if (desc.abstract) {
+            htmls.push("<p>");
+            htmls.push(desc.abstract);
+            htmls.push("</p>");
+        }
+
+        if (desc.author) {
+            htmls.push("<b>Author: </b> "+desc.author);
+            htmls.push("<br>");
+        }
+
+        if (desc.lab) {
+            htmls.push("<b>Lab: </b> "+desc.lab);
+            htmls.push("<br>");
+        }
+        if (desc.institution) {
+            htmls.push("<b>Institution: </b> "+desc.institution);
+            htmls.push("<br>");
+        }
 
 
-        var htmls = [];
-        var activeIdx = 0;
-        htmls.push("<div id='tpDatasetList' class='list-group' style='width:400px; position:fixed; height:"+listGroupHeight+"px; overflow-y:scroll; width:"+buttonWidth+"px'>");
-        for (var i = 0; i < gDatasetList.length; i++) {
-            var dataset = gDatasetList[i];
-            var line = "<a id='tpDatasetButton_"+i+"' role='button' class='list-group-item' data-datasetid='"+i+"'>"; // bootstrap seems to remove the id
+        htmlAddLink(htmls, desc, "biorxiv_url");
+        htmlAddLink(htmls, desc, "paper_url");
+        htmlAddLink(htmls, desc, "other_url");
+        htmlAddLink(htmls, desc, "geo_series");
+        htmlAddLink(htmls, desc, "pmid");
+        htmlAddLink(htmls, desc, "dbgap");
+        htmlAddLink(htmls, desc, "sra_study");
+        htmlAddLink(htmls, desc, "bioproject");
+        htmlAddLink(htmls, desc, "sra");
+        htmlAddLink(htmls, desc, "doi");
+        htmlAddLink(htmls, desc, "arrayexpress");
+        htmlAddLink(htmls, desc, "ena_project");
+
+        if (desc.submitter) {
+            htmls.push("<b>Submitted by: </b> "+desc.submitter);
+            if (desc.submission_date) {
+                htmls.push(" ("+desc.submission_date);
+                if (desc.version)
+                    htmls.push(", Version "+desc.version);
+                htmls.push(")");
+            }
+            htmls.push("<br>");
+        }
+
+
+        if (datasetInfo.collections===undefined)
+            htmls.push("<b>Direct link to this dataset for manuscripts: </b> https://"+datasetInfo.name+".cells.ucsc.edu");
+        else
+            htmls.push("<b>Direct link to collection for manuscripts: </b> https://"+datasetInfo.collections[0]+".cells.ucsc.edu");
+        htmls.push("<br>");
+
+        $( "#pane1" ).html(htmls.join(""));
+
+        htmls.length = 0;
+        if (desc.methods) {
+            htmls.push("<p>");
+            htmls.push(desc.methods);
+            htmls.push("</p>");
+        }
+        if (desc.algParams) {
+            htmls.push("<p><b>Algorithm parameters: </b>");
+            let algParams = desc.algParams;
+            for (let i=0; i<algParams.length; i++) {
+                let key = algParams[i][0];
+                let val = algParams[i][1];
+                htmls.push(key+"="+val+", ");
+            }
+            htmls.push("</p>");
+        }
+        $( "#pane2" ).html(htmls.join(""));
+
+        // downloads pane
+        htmls.length = 0;
+        if (desc.coordFiles===undefined) {
+            htmls.push("To download the data for datasets in this collection: open the collection, "); 
+            htmls.push("select a dataset in the list to the left, and navigate to the 'Data Download' tab. ");
+            htmls.push("This information can also be accessed while viewing a dataset by clicking the 'Info' button.");
+        } else {
+            htmls.push("<p><b>Expression matrix:</b> <a href='"+datasetInfo.name);
+            htmls.push("/exprMatrix.tsv.gz'>exprMatrix.tsv.gz</a>");
+            if (desc.unitDesc)
+                htmls.push("<br>Values are: "+desc.unitDesc);
+            htmls.push("</p>");
+
+            if (desc.rawMatrixFile) {
+                htmls.push("<p><b>Raw expression matrix:</b> <a href='"+datasetInfo.name);
+                htmls.push("/"+desc.rawMatrixFile+"'>"+desc.rawMatrixFile+"</a>");
+                if (desc.rawMatrixNote)
+                    htmls.push("<br>"+desc.rawMatrixNote);
+                htmls.push("</p>");
+            }
+
+            htmls.push("<p><b>Cell meta annotations:</b> <a target=_blank href='"+datasetInfo.name);
+            htmls.push("/meta.tsv'>meta.tsv</a></p>");
+
+            htmls.push("<p><b>Dimensionality reduction coordinates:</b><br>");
+            for (let fname of desc.coordFiles)
+                htmls.push("<a target=_blank href='"+datasetInfo.name+"/"+fname+"'>"+fname+"</a><br>");
+            htmls.push("</p>");
+
+            htmls.push("<p><b>Cell Browser configuration</b>: ");
+            htmls.push("<a target=_blank href='"+datasetInfo.name+"/dataset.json'>dataset.json</a></p>");
+
+            htmls.push("<p><b>General dataset description</b>: ");
+            htmls.push("<a target=_blank href='"+datasetInfo.name+"/desc.json'>desc.json</a></p>");
+        }
+
+        $( "#pane3" ).html(htmls.join(""));
+    }
+
+    function buildListPanel(datasetList, noteSpace, listGroupHeight, leftPaneWidth, htmls) {
+        /* make a dataset list and append its html lines to htmls */
+        htmls.push("<div id='tpDatasetList' class='list-group' style='width:400px; position:absolute; top:"+noteSpace+"; height:"+listGroupHeight+"px; overflow-y:scroll; width:"+leftPaneWidth+"px'>");
+        if (!gDatasetList || gDatasetList.length===0) {
+            alert("No datasets are available. Please make sure that at least one dataset does not set visibility=hide "+
+                " or that at least one collection is defined. Problems? -> cells@ucsc.edu");
+            return;
+        }
+
+        for (var i = 0; i < datasetList.length; i++) {
+            var dataset = datasetList[i];
+
+            var clickClass = "tpDatasetButton";
+            if (dataset.isCollection)
+                clickClass = "tpCollectionButton";
+
+            var line = "<a id='tpDatasetButton_"+i+"' role='button' class='list-group-item "+clickClass+"' data-datasetid='"+i+"'>"; // bootstrap seems to remove the id
             htmls.push(line);
-            htmls.push('<button type="button" class="btn btn-primary btn-xs load-dataset" data-placement="bottom">Open</button>')
+            if (!dataset.isSummary)
+                htmls.push('<button type="button" class="btn btn-primary btn-xs load-dataset" data-placement="bottom">Open</button>');
 
             if (dataset.sampleCount!==undefined) {
                 var countDesc = prettyNumber(dataset.sampleCount);
-                htmls.push("<span class='badge'>"+countDesc+"</span>");
+                htmls.push("<span class='badge' style='background-color: #888'>"+countDesc+"</span>");
+            }
+
+            if (dataset.datasetCount!==undefined) {
+                htmls.push("<span class='badge' style='background-color: #28a745'>"+dataset.datasetCount+" datasets</span>");
             }
 
             if (dataset.tags!==undefined) {
@@ -362,12 +640,70 @@ var cellbrowser = function() {
                 }
             }
             htmls.push(dataset.shortLabel+"</a>");
-            if (db!==null && db.name===dataset.name)
-                activeIdx = i;
+            //if (db!==null && db.name===dataset.name)
+                //activeIdx = i;
         }
         htmls.push("</div>"); // list-group
+    }
 
-        htmls.push("<div id='tpOpenDialogLabel' style='width:"+tabsWidth+"px; position:absolute; left: " + (buttonWidth + 40) + "px; top: 10px;'>");
+    function openDatasetDialog(datasetList, openDsInfo, openCollection) {
+    /* build dataset open dialog, 
+     * - datasetList is the list of all datasets to show on the left, null to hide list
+     * - openDsInfo is the currently open object or a collection. 
+     * - openCollection is true to show 'collection' decorations: summary entry, note at the top and back link
+     */
+        var title = null;
+        var note = "";
+        var noteSpace = "2px"; // space from top of dialog to info pane and tabs
+        //var datasetList = [];
+        var activeIdx = 0;
+        var onlyInfo = false;
+
+        if (datasetList===null)
+            onlyInfo = true;
+
+        // click handlers send the click event, so make sure the collInfo is really a collinfo object
+        if (openDsInfo && openDsInfo.isCollection) {
+            // select from a collection
+            title = "Select one dataset from the collection '"+openDsInfo.shortLabel+"'";
+            //datasetList = openDsInfo.datasets;
+            note = "<p>The collection '"+openDsInfo.shortLabel+"' contains "+datasetList.length+" datasets. " +
+                "Double-click or click 'Open' below. To move between datasets later in the cell browser, " +
+                "use the 'Collection' dropdown. </p>" +
+                "<span id='tpBackToMainLink' class='link'>&lt; back to the main list</span>";
+            noteSpace = "4em";
+            changeUrl({"ds":openDsInfo.name});
+            activeIdx = 0;
+            datasetList.unshift( {
+                shortLabel:"Overview", 
+                name:openDsInfo.name, 
+                hasFiles:openDsInfo.hasFiles,
+                isSummary:true
+            });
+        }
+        else {
+            // select from the top-level list
+            //datasetList = gDatasetList;
+            title = "Choose Cell Browser Dataset";
+        }
+        if (onlyInfo)
+            title = "Dataset Information";
+
+        var winWidth = window.innerWidth - 0.05*window.innerWidth;
+        var winHeight = window.innerHeight - 0.05*window.innerHeight;
+        var leftPaneWidth = 400;
+        var tabsWidth = winWidth - leftPaneWidth - 70;
+        var listGroupHeight = winHeight - 100;
+
+        var htmls = [];
+        htmls.push(note);
+
+        if (onlyInfo)
+            leftPaneWidth = 0;
+        else
+            buildListPanel(datasetList, noteSpace, listGroupHeight, leftPaneWidth, htmls);
+
+        htmls.push("<div id='tpOpenDialogLabel' style='width:"+tabsWidth+"px; position:absolute; left: " + (leftPaneWidth + 40) + "px; top: "+noteSpace+";'>");
         htmls.push("<div id='tpOpenDialogTabs'>");
         htmls.push("<ul class='nav nav-tabs'>");
         htmls.push("<li class='active'><a id='tabLink1' data-toggle='tab' href='#pane1'>Abstract</a></li>");
@@ -397,22 +733,45 @@ var cellbrowser = function() {
         //htmls.push("<div id='tpSelectedId' data-selectedid='0'>"); // store the currently selected datasetId in the DOM
         var selDatasetIdx = 0;
 
-        var buttons = {}
+        var buttons = [];
         if (db!==null) {
-            buttons["Cancel"] = function() { $( this ).dialog( "close" ); };
+            buttons.push( {
+                text:"Cancel", 
+                click: function() { 
+                    $( this ).dialog( "close" ); 
+                    if (openDsInfo.isCollection)
+                        openDatasetDialog(gDatasetList, gDatasetList[0]); // show top-level dialog
+                }
+            });
         }
 
-        showDialogBox(htmls, "Choose Cell Browser Dataset", {width: winWidth, height:winHeight, buttons: buttons});
+        showDialogBox(htmls, title, {width: winWidth, height:winHeight, buttons: buttons});
+
+        $('#tpBackToMainLink').click( function() {
+            $(".ui-dialog-content").dialog("close");
+            openDatasetDialog(gDatasetList, gDatasetList[0]);
+        } );
 
         var scroller = $("#tpDatasetList").overlayScrollbars({ });
+
+        // little inline function
+        function openCollOrDataset(selDatasetIdx) {
+            /* click handler, opens either a collection or a dataset */
+            var dsInfo = datasetList[selDatasetIdx];
+            var datasetName = dsInfo.name;
+            if (dsInfo.isCollection)
+                showCollectionDialog(datasetName);
+            else
+                loadDataset(datasetName, true, dsInfo.md5);
+            $(".ui-dialog-content").dialog("close");
+        }
+        // inline function end
 
         $("button.list-group-item").eq(selDatasetIdx).css("z-index", "1000"); // fix up first overlap
         $("button.list-group-item").keypress(function(e) {
             // load the current dataset when the user presses Return
-            if (e.which == '13') {
-                var datasetName = gDatasetList[selDatasetIdx].name;
-                loadDataset(datasetName, true);
-                $(".ui-dialog-content").dialog("close");
+            if (e.which === '13') {
+                openCollOrDataset(selDatasetIdx);
             }
         });
 
@@ -420,24 +779,20 @@ var cellbrowser = function() {
             selDatasetIdx = parseInt($(ev.target).data('datasetid')); // index of clicked dataset
             $(".list-group-item").removeClass("active");
             $('#tpDatasetButton_'+selDatasetIdx).bsButton("toggle"); // had to rename .button() in index.html
-            openDatasetLoadPane(selDatasetIdx);
+            var datasetInfo = datasetList[selDatasetIdx];
+            openDatasetLoadPane(datasetInfo);
         });
-
-        function openDatasetDoLoad(selDatasetIdx) {
-            var datasetName = gDatasetList[selDatasetIdx].name;
-            loadDataset(datasetName, true);
-            $(".ui-dialog-content").dialog("close");
-        }
 
         $(".list-group-item").dblclick( function(ev) {
             selDatasetIdx = parseInt($(this).data('datasetid'));
-            openDatasetDoLoad(selDatasetIdx);
+            openCollOrDataset(selDatasetIdx);
         });
 
         $(".load-dataset").click( function (ev) {
             ev.preventDefault();
+            ev.stopPropagation();
             selDatasetIdx = parseInt($(this).parents('.list-group-item').data('datasetid'));
-            openDatasetDoLoad(selDatasetIdx);
+            openCollOrDataset(selDatasetIdx);
             return false;
         });
 
@@ -451,10 +806,10 @@ var cellbrowser = function() {
             $("button.list-group-item").eq(selDatasetIdx).css("z-index", "1000");
         });
 
-        if (activeIdx!==null) {
+        if (activeIdx!==null && !onlyInfo) {
             $('#tpDatasetButton_'+activeIdx).bsButton("toggle"); // had to rename .button() in .html to bsButton
             //scroller.scroll($("#tpDatasetButton_"+activeIdx)); // scroll left pane to current button
-            $('#tpDatasetList').overlayScrollbars().scroll($("#tpDatasetButton_"+activeIdx))
+            $('#tpDatasetList').overlayScrollbars().scroll($("#tpDatasetButton_"+activeIdx));
         }
 
         // this is weird, but I have not found a better way to make the tab show up
@@ -463,24 +818,9 @@ var cellbrowser = function() {
 
         // finally, activate the default pane and load its html
         $("button.list-group-item").eq(activeIdx).trigger("focus");
-        openDatasetLoadPane(activeIdx);
+        openDatasetLoadPane(openDsInfo);
     }
 
-    function drawLayoutMenu() {
-       /* Add the View / Layout menu to the DOM */
-      var htmls = [];
-      var coordFiles = gCurrentDataset.coordFiles;
-      for (var i=0; i<coordFiles.length; i++) {
-           var label = coordFiles[i].shortLabel;
-           if (label===undefined) {
-               label = "Dataset "+i;
-               console.log("Dataset "+i+" has no 'shortLabel' attribute");
-           }
-           htmls.push('<li><a href="#" class="tpDataset" id="'+i+'">'+label+'</a></li>');
-      }
-      $("#tpLayoutMenu").empty();
-      $("#tpLayoutMenu").append(htmls.join(""));
-    }
 
     function onSelChange(cellIds) {
     /* called each time when the selection has been changed */
@@ -490,7 +830,10 @@ var cellbrowser = function() {
         } else if (cellIds.length===1) {
             var cellId = cellIds[0];
             var cellCountBelow = cellIds.length-1;
-            db.loadMetaForCell(cellId, function(ci) { updateMetaBarOneCell(ci, cellCountBelow);}, onProgress);
+            updateMetaBarCustomFields(cellId);
+            db.loadMetaForCell(cellId, function(ci) { 
+                updateMetaBarOneCell(ci, cellCountBelow);
+            }, onProgress);
         } else
             updateMetaBarManyCells(cellIds);
 
@@ -506,24 +849,6 @@ var cellbrowser = function() {
         canvas.toBlob(function(blob) { saveAs( blob , "cellBrowser.png"); } , "image/png");
     }
 
-    function onDownloadClick() {
-    /* user clicks one of the "download data" submenu links: matrix, meta or coords  */
-        var name = event.target.id.split("_")[1]; // the name of the dataset
-        var baseUrl = gCurrentDataset.baseUrl;
-        var url = null;
-        if (name==="matrix") {
-            url = joinPaths([baseUrl,"geneMatrix.tsv"]);
-            // hack for aparna, to send the original matrix
-            if (baseUrl==="aparna/" || baseUrl==="aparna")
-                url = joinPaths([baseUrl,"matrix.tsv.gz"]);
-            document.location.href = url;
-        }
-        if (name==="meta") {
-            url = joinPaths([baseUrl,"meta.tsv"]);
-            document.location.href = url;
-        }
-    }
-
     function onSelectAllClick() {
     /* Edit - select all visible*/
         clearSelectionState();
@@ -536,6 +861,13 @@ var cellbrowser = function() {
     /* Edit - Select None */
         clearSelectionState();
         renderer.selectClear();
+        renderer.drawDots();
+    }
+
+    function onSelectInvertClick() {
+    /* Edit - Invert selection */
+        clearSelectionState();
+        renderer.selectInvert();
         renderer.drawDots();
     }
 
@@ -581,19 +913,24 @@ var cellbrowser = function() {
 
     function findCellsUpdateMetaCombo(rowIdx, fieldIdx) {
         /* given the row and the ID name of the field, setup the combo box row */
-        var valCounts = db.getMetaFields()[fieldIdx].valCounts;
+        var metaInfo = db.getMetaFields()[fieldIdx];
+        var valCounts = metaInfo.valCounts;
+        var shortLabels = metaInfo.ui.shortLabels;
+        $('#tpSelectMetaCombo_'+rowIdx).val("tpMetaVal_"+fieldIdx).trigger('chosen:updated'); // update the meta dropdown
+
         if (valCounts===undefined) {
             // this is a numeric field
+            $('#tpSelectValue_'+rowIdx).val("");
             $('#tpSelectValue_'+rowIdx).show();
             $('#tpSelectMetaValueEnum_'+rowIdx).hide();
         } else {
             // it's an enum field
-            $('#tpSelectMetaCombo_'+rowIdx).val("tpMetaVal_"+fieldIdx).trigger('chosen:updated'); // empty the meta dropdown
             $('#tpSelectValue_'+rowIdx).hide();
             $('#tpSelectMetaValueEnum_'+rowIdx).empty();
             for (var i = 0; i < valCounts.length; i++) {
-                var valName = valCounts[i][0];
-                $('#tpSelectMetaValueEnum_'+rowIdx).append("<option value='"+i+"'>"+valName+"</option>");
+                //var valName = valCounts[i][0];
+                var valLabel = shortLabels[i];
+                $('#tpSelectMetaValueEnum_'+rowIdx).append("<option value='"+i+"'>"+valLabel+"</option>");
             }
             $('#tpSelectMetaValueEnum_'+rowIdx).show();
         }
@@ -619,6 +956,15 @@ var cellbrowser = function() {
         /* call the jquery inits and setup the change listeners for a combobox row */
         /* Yes, a UI framework, like react or angular, would be very helpful here */
 
+        // first of all: check if the meta name actually exists in this dataset still
+        let metaInfo = null;
+        var metaName = query["m"];
+        if (metaName!==undefined) {
+            metaInfo = db.findMetaInfo(metaName);
+            if (metaInfo===null)
+                return;
+        }
+
         // auto-suggest for gene searches
         $('#tpSelectGeneCombo_'+rowIdx).selectize({
                 "labelField" : 'text',
@@ -639,16 +985,14 @@ var cellbrowser = function() {
 
 
         var rowType = "gene";
-        var metaName = query["m"];
         var op = getQueryOp(query);
-        if (metaName==undefined) {
+        if (metaName===undefined) {
             // this is a gene query
             findCellsUpdateRowType(rowIdx, rowType);
             selectizeSetValue("#tpSelectGeneCombo_"+rowIdx, query["g"]);
         } else {
             // it's a meta query
             rowType = "meta";
-            var metaInfo = findMetaInfo(metaName);
             findCellsUpdateRowType(rowIdx, rowType);
             findCellsUpdateMetaCombo(rowIdx, metaInfo.index);
         }
@@ -682,7 +1026,7 @@ var cellbrowser = function() {
             var op = $('#tpSelectOperator_'+rowIdx).val();
 
             var queryType = $('#tpSelectType_'+rowIdx).val();
-            if (queryType=="expr") {
+            if (queryType==="expr") {
                 var gene = $('#tpSelectGeneCombo_'+rowIdx).val();
                 var val = $('#tpSelectValue_'+rowIdx).val();
                 query["g"] = gene;
@@ -691,13 +1035,22 @@ var cellbrowser = function() {
             else {
                 var metaValTag = $('#tpSelectMetaCombo_'+rowIdx).val();
                 var metaIdx = parseInt(metaValTag.split("_")[1]);
-                var metaName = db.conf.metaFields[metaIdx].name;
+                var metaInfo = db.conf.metaFields[metaIdx];
+                var metaName = metaInfo.name;
                 query["m"] = metaName;
 
-                var selVal = $('#tpSelectMetaValueEnum_'+rowIdx).val();
-                var valIdx = parseInt(selVal);
-                var val = db.conf.metaFields[metaIdx].valCounts[valIdx][0];
-                query[op] = val;
+                var opVal = null;
+                var selOp = null;
+                if (metaInfo.type==="enum") {
+                    let selVal = $('#tpSelectMetaValueEnum_'+rowIdx).val();
+                    var valIdx = parseInt(selVal);
+                    opVal = db.conf.metaFields[metaIdx].valCounts[valIdx][0];
+                } else {
+                    let selVal = $('#tpSelectValue_'+rowIdx).val();
+                    opVal = parseFloat(selVal);
+                }
+
+                query[op] = opVal;
             }
             queries.push(query);
         }
@@ -743,23 +1096,12 @@ var cellbrowser = function() {
         return selCells;
     }
 
-    function intersectArrays(arrList) {
-        /* return the intersection of all arrays as an array. Non-IE11? */
-        var smallSet = new Set(arrList[0]);
-        for (var i=1; i < arrList.length; i++) {
-            var otherSet = new Set(arrList[i]);
-            smallSet = new Set([...smallSet].filter(x => otherSet.has(x)));
-        }
-        var newArr = Array.from(smallSet);
-        return newArr;
-    }
-
     function findCellsMatchingQueryList(queries, onDone) {
         /* given a list of dicts, return the identifiers of the matching cells */
         /* example: [{"g":"PITX2", "gt":0.05}, {"m":"Cluster", "eq":"cluster 2"}] */
 
         var doneQueries = 0;
-        var queryResults = []
+        var queryResults = [];
 
         function allQueriesDone() {
             // XX this could use a promise framework
@@ -771,18 +1113,21 @@ var cellbrowser = function() {
 
         function gotGeneVec(exprArr, sym, desc, funcVal) {
             funcVal[1] = Number(funcVal[1]); // for gene queries, must be a number, not string
-            var selCells = searchArrayForFuncAndVal(exprArr, funcVal)
+            var selCells = searchArrayForFuncAndVal(exprArr, funcVal);
             queryResults.push(selCells);
             doneQueries++;
-            if (doneQueries==queries.length)
+            if (doneQueries===queries.length)
                 allQueriesDone();
         }
 
         function gotMetaArr(metaArr, metaInfo, funcVal) {
-            var selCells = searchArrayForFuncAndVal(metaArr, funcVal)
+            /* filter meta data array with funcVal = function + value  */
+            if (metaInfo.origVals)
+                metaArr = metaInfo.origVals; // numerical meta fields have the original numbers stored 
+            var selCells = searchArrayForFuncAndVal(metaArr, funcVal);
             queryResults.push(selCells);
             doneQueries++;
-            if (doneQueries==queries.length)
+            if (doneQueries===queries.length)
                 allQueriesDone();
         }
 
@@ -797,8 +1142,19 @@ var cellbrowser = function() {
                 var fieldName = query.m;
                 var fieldIdx = cbUtil.findIdxWhereEq(db.conf.metaFields, "name", fieldName);
                 var findVal = funcVal[1];
-                var fieldValIdx = findMetaValIndex(fieldIdx, findVal);
-                db.loadMetaVec(fieldIdx, gotMetaArr, null, [funcVal[0], fieldValIdx]);
+
+                var metaInfo = db.getMetaFields()[fieldIdx];
+                if (metaInfo.type==="enum")
+                    findVal = findMetaValIndex(metaInfo, findVal);
+                
+                let searchDesc = [funcVal[0], findVal];
+
+                if (metaInfo.origVals)
+                    // for numeric fields, the raw data is already in memory
+                    gotMetaArr(metaInfo.origVals, metaInfo, searchDesc)
+                else
+                    // other fields may not be loaded yet
+                    db.loadMetaVec(metaInfo, gotMetaArr, null, searchDesc);
             }
         }
     }
@@ -816,50 +1172,145 @@ var cellbrowser = function() {
         }
     }
 
-    function onSelectComplexClick() {
+    function addNewAnnotation(fieldLabel, newMetaValue, cellIds) {              var metaInfo;
+        let cellCount = db.conf.sampleCount;
+        if (!db.getMetaFields()[0].isCustom) {
+            // add a new enum meta field
+            metaInfo = {
+                name:"custom",
+                label: fieldLabel,
+                type: "enum",
+                arr : Array.from(new Uint8Array(cellCount)), // cannot JSON-serialize Typed Arrays
+                ui : {
+                    shortLabels : ["No annotation"]
+                },
+                valCounts : [ ["No annotation", cellCount]]
+            }
+            db.addCustomMetaField(metaInfo);
+            rebuildMetaPanel();
+            activateTab("meta"); 
+        } else
+            metaInfo = db.getMetaFields()[0];
+
+        metaInfo.ui.shortLabels.push( newMetaValue );
+        let newValIdx = metaInfo.valCounts.length;
+        metaInfo.valCounts.push( [newMetaValue, cellIds.length]);
+        // update the "No annotation" count
+        let noAnnotCount = metaInfo.valCounts[0][1];
+        metaInfo.valCounts[0][1] = noAnnotCount - cellIds.length;
+     
+        let arr = metaInfo.arr;
+        for (let i=0; i<cellIds.length; i++)
+            arr[cellIds[i]] = newValIdx;
+        // need to update the value histogram
+        db.metaHist[metaInfo.name] = makeFieldHistogram(metaInfo, cellIds, arr);
+        updateMetaBarManyCells(cellIds); // redo, as we rebuilt the meta panel
+        
+        var jsonStr = JSON.stringify(metaInfo);
+        var comprStr = LZString.compress(jsonStr);
+        localStorage.setItem(db.name+"|custom", comprStr);
+        }
+
+    function onSelectNameClick() {
+        /* Edit > Name selection */
+
+        let title = "Annotate selected "+gSampleDesc+"s";
+
+        let htmls = [];
+        htmls.push('<p>There are '+renderer.getSelection().length+' '+gSampleDesc+' in the current selection.</p>');
+
+        htmls.push('<p><b>Name of annotation field</b>:<br>');
+        htmls.push('<input class="tpDialogInput" id="tpFieldLabel" type="text" value="My custom annotations"></p>');
+        htmls.push('<p><b>Annotate selected cells as:</b><br>');
+        htmls.push('<input class="tpDialogInput" id="tpMetaVal" type="text"></p>');
+        htmls.push('<p>Remove annotations later by clicking <b>Tools > Remove all annotations</b>.</p>');
+
+        var dlgHeight = 400;
+        var dlgWidth = 800;
+        var buttons = [
+            //"Close and remove all annotations" : function() {
+                //db.getMetaFields().shift();
+                //rebuildMetaPanel();
+                //localStorage.removeItem(db.name+"|custom");
+                //resetCustomAnnotations();
+            //},
+        {text:"OK", click: function() {
+                let fieldLabel = $('#tpFieldLabel').val();
+                if (fieldLabel==="")
+                    fieldLabel = "My custom annotations";                
+                let newMetaValue = $("#tpMetaVal").val();
+                if (newMetaValue==="")
+                    return;
+
+                addNewAnnotation(fieldLabel, newMetaValue, renderer.getSelection());
+                $( this ).dialog( "close" ); 
+                colorByMetaField("custom");
+            }
+        }];
+        showDialogBox(htmls, title, {showClose:true, height:dlgHeight, width:dlgWidth, buttons:buttons});
+        $("#tpMetaVal").focus();
+        return true;
+    }
+
+    function onFindCellsClick() {
     /* Edit - Find cells */
 
         var dlgHeight = 400;
         var dlgWidth = 800;
-        var buttons = {
+        var buttons = 
+        [
+            //{
+                //text:"Cancel", 
+                //click:function() {
+                    //// save state even if user presses cancel  - good idea?
+                    //var queryStr = JSURL.stringify(queryList);
+                    //var queryList = readSelectForm();
+                    //localStorage.setItem(db.name+"|select", queryStr);
+                    //$(this).dialog("close");
+                //}
+            //},
+            {
+                text:"OK", 
+                click: function() {
+                    var queryList = readSelectForm();
 
-            "Cancel" : function() {
-                    $(this).dialog("close");
-            },
-
-            "OK" : function() {
-                var queryList = readSelectForm();
-
-                findCellsMatchingQueryList(queryList, function(cellIds) {
-                    if (cellIds.length===0) {
-                        alert("No matching "+gSampleDesc+"s.");
-                    } else {
-                        renderer.selectSet(cellIds);
-                        //changeUrl({'select':JSON.stringify(queryList)});
-                        changeUrl({'select':JSURL.stringify(queryList)});
-                        renderer.drawDots();
-                        $("#tpDialog").dialog("close");
-                    }
-                });
+                    findCellsMatchingQueryList(queryList, function(cellIds) {
+                        if (cellIds.length===0) {
+                            alert("No matching "+gSampleDesc+"s.");
+                        } else {
+                            renderer.selectSet(cellIds);
+                            //changeUrl({'select':JSON.stringify(queryList)});
+                            var queryStr = JSURL.stringify(queryList);
+                            changeUrl({'select':queryStr});
+                            localStorage.setItem(db.name+"|select", queryStr);
+                            renderer.drawDots();
+                            $("#tpDialog").dialog("close");
+                        }
+                    });
+                }
             }
-
-        };
+        ];
 
         var htmls = [];
 
         // build from current query or create a sample query
         var queries = [];
         var queryStr = getVar("select");
-        if (queryStr!==undefined)
-            queries = JSURL.parse(queryStr);
-        else {
+
+        if (queryStr===undefined)
+            queryStr = localStorage.getItem(db.name+"|select");
+
+        if (queryStr===undefined || queryStr===null)
             queries = [makeSampleQuery()];
+        else {
+            queries = JSURL.parse(queryStr);
         }
 
-        var comboWidth = 150;
+        var comboWidth = 250;
 
+        var query;
         for (var i=0; i < queries.length; i++) {
-            var query = queries[i];
+            query = queries[i];
             buildOneComboboxRow(htmls, comboWidth, i, query);
         }
 
@@ -867,8 +1318,9 @@ var cellbrowser = function() {
 
         showDialogBox(htmls, "Find cells based on annotation or gene expression", {showClose:true, height:dlgHeight, width:dlgWidth, buttons:buttons});
 
+
         for (i=0; i < queries.length; i++) {
-            var query = queries[i];
+            query = queries[i];
             connectOneComboboxRow(comboWidth, i, query);
         }
 
@@ -911,6 +1363,347 @@ var cellbrowser = function() {
         renderer.render(stage);
     }
 
+    function cartSave(db) {
+        /* save db.cart dataset long-term changes that may be shared with others, like colors, labels, annotations, etc 
+         * For now, save to localStorage and also to the URL. */
+
+        var datasetName = db.name;
+        var data = db.cart;
+        var key = "cart";
+
+        var fullKey = datasetName+"###"+key;
+        var jsonStr = JSON.stringify(data);
+        var comprStr = LZString.compress(jsonStr);
+        var uriStr = LZString.compressToEncodedURIComponent(jsonStr);
+        localStorage.setItem(fullKey, comprStr);
+        var urlData = {};
+        if (isEmpty(data))
+            uriStr = null;
+        urlData[key] = uriStr;
+        changeUrl(urlData);
+        console.log("Saving state: ", data);
+    }
+
+    function createMetaUiFields(db) {
+        /* This function changes db.metaFields[fieldName], 
+         * it adds: .ui.shortLabels, .ui.longLabels, ui.palette and .ui.colors;
+         * ui info fields hold the final data as shown in the ui, they're calculated when the cart is loaded.
+         * apply changes like labels/color/etc stored the userMeta object to db.conf.metaFields.
+         * Potentially clean up the changes and recreate the cart object.
+         * Currently, this only does something for enum fields.
+         * */
+
+        if (db.cart===undefined)
+            db.cart = {};
+        var userMeta = db.cart;
+        var metaFields = db.conf.metaFields;
+
+        for (var metaIdx = 0; metaIdx < metaFields.length; metaIdx++) {
+            var metaInfo = metaFields[metaIdx];
+            var fieldChanges = userMeta[metaInfo.name] || {};
+
+            if (metaInfo.type!=="enum") {
+                metaInfo.ui = {};
+                continue;
+            }
+
+            // create shortLabels
+            var shortLabels = null;
+            var oldCounts = metaInfo.valCounts;
+            if (oldCounts) {
+                shortLabels = [];
+                for (var i = 0; i < oldCounts.length; i++)
+                    shortLabels.push(oldCounts[i][0]);
+                var newLabels = fieldChanges.shortLabels;
+                shortLabels = copyNonEmpty(newLabels, shortLabels);
+            }
+
+            // create the long labels
+            var longLabels = [];
+            if ("longLabels" in metaInfo)
+                longLabels = cloneArray(metaInfo.longLabels);
+            else
+                longLabels = cloneArray(shortLabels);
+            longLabels = copyNonEmpty(fieldChanges.longLabels, longLabels);
+            
+            // create the colors: configured colors override default colors and cart overrides those
+            var colors = makeColorPalette(cDefQualPalette, metaInfo.valCounts.length);
+            if ("colors" in metaInfo)
+                copyNonNull(metaInfo.colors, colors);
+            var newColors = fieldChanges.colors;
+            colors = copyNonEmpty(newColors, colors);
+
+            var ui = {};
+            ui.colors = newColors;
+            ui.longLabels = longLabels;
+            ui.shortLabels = shortLabels;
+            metaInfo.ui = ui;
+        }
+
+        //var delFields = [];
+        //var delAttrs = [];
+        //if (metaInfo===null) { // field does not exist anymore
+            //delFields.push(fieldName);
+            //continue;
+        //}
+
+        // remove all fields and attributes that were found to be invalid in the current state
+        // so we don't accumulate crap
+        //var cleanedFields = [];
+        //for (var i = 0; i < delAttrs.length; i++) {
+            //var fieldName = delAttrs[i][0];
+            //var attrName = delAttrs[i][1];
+            //delete userMeta[fieldName][attrName];
+            //cleanedFields.push(fieldName);
+        //}
+
+        //for (var i = 0; i < delFields.length; i++) {
+            //var fieldName = delFields[i];
+            //delete userMeta[fieldName];
+            //cleanedFields.push(fieldName);
+        //}
+        //if (delAttrs.length!==0)
+            //warn("You had previously changed labels or colors or annotations but the dataset has been updated since then. "+
+                //"As a result, your annotations had to be removed. This concerned the following annotation fields: "+
+                //cleanedFields.join(", "));
+    }
+
+    function cartFieldArrayUpdate(db, metaInfo, key, pos, val) {
+        /* write val into db.cart[fieldName][key][pos], save the dataset cart and apply it. 
+         * db.cart[fieldName][key] is an array of arrLen 
+         * */
+        var cart = db.cart;
+        var fieldName = metaInfo.name;
+        var arrLen = metaInfo.valCounts.length;
+
+        if (!(fieldName in cart))
+            cart[fieldName] = {};
+
+        // init array
+        if (!(key in cart[fieldName])) {
+            var emptyArr = [];
+            for (var i=0; i<arrLen; i++)
+                emptyArr.push("");
+            cart[fieldName][key] = emptyArr;
+        }
+
+        cart[fieldName][key][pos] = val;
+        cartSave(db);
+        createMetaUiFields(db);
+    }
+
+    function cartOverwrite(db, key, val) {
+        /* write val into db.cart[key][attr], save the dataset cart and apply it. 
+         * attrName can be null in which case db.cart[key] will be replaced with val  */
+        var cart = db.cart;
+        if (!(key in db.cart))
+            cart[key] = {};
+
+        cart[key] = val;
+
+        cartSave(db);
+        createMetaUiFields(db);
+    }
+
+    function cartLoad(db) {
+        /* load the entire dataset cart from the URL or - if there is no cart on the URL - from localStorage */
+        var datasetName = db.name;
+        var cart = {};
+        var key = "cart";
+        var uriStr = getVar(key, null);
+        var jsonStr;
+        if (uriStr!==null) {
+            jsonStr = LZString.decompressFromEncodedURIComponent(uriStr);
+            cart = JSON.parse(jsonStr);
+            console.log("Loading cart from URL: ", cart);
+        }
+        else {
+            var fullKey = datasetName+"###"+key;
+            var comprStr = localStorage.getItem(fullKey);
+            if (comprStr) {
+                jsonStr = LZString.decompress(comprStr);
+                cart = JSON.parse(jsonStr);
+                console.log("Loading cart from local storage: ", cart);
+            }
+        }
+        db.cart = cart;
+        createMetaUiFields(db);
+
+    }
+
+    function onRunClusteringClick() {
+        /* not used yet */
+        var myArray = new ArrayBuffer(512);
+        var longInt8View = new Uint8Array(myArray);
+
+        // generate some data
+        for (var i=0; i< longInt8View.length; i++) {
+        longInt8View[i] = i % 256;
+        }
+
+        //let url = "http://localhost:5050/upload";
+        let url = "http://localhost:5050/bin";
+        var xhr = new XMLHttpRequest();
+        //xhr.open("POST", url, false);
+        xhr.open("GET", url, true);
+        xhr.responseType = "arraybuffer";
+        xhr.onload = function() { var buf = xhr.response; console.log(buf)};
+        xhr.send(null);
+        //xhr.send(myArray);
+    }
+
+    function resetCustomAnnotations() {
+        db.removeAllCustomAnnots();
+        rebuildMetaPanel();
+        changeUrl({"meta":null});
+        colorByDefaultField();
+        localStorage.removeItem(db.name+"|custom");
+    }
+
+    function onCustomAnnotationsClick() {
+        /* */
+        if (!db.getMetaFields()[0].isCustom) {
+            alert("You have currently no custom annotations. Select a few cells and use Edit > Name selection "+
+                    "to create a custom annotation field.");
+        } else {
+            resetCustomAnnotations();
+        }
+    }
+
+    function onRenameClustersClick() {
+    /* Tools - Rename Clusters */
+        var htmls = [];
+        htmls.push("<p>Change labels below. To keep the old name, leave the 'New Name' cell empty. You cannot modify the 'Orig. Name' column.</p>");
+        //htmls.push('<p>To rename a single cluster without this dialog: click onto it in the legend, then click its label.</p>');
+        htmls.push('<div id="tpGrid" style="width:100%;height:500px;"></div>');
+        var title = "Rename Clusters";
+        var dlgHeight = window.innerHeight - 100;
+        var dlgWidth = 650;
+
+        var clusterField = db.conf.labelField;
+
+	var data = [];
+
+        var buttons = [
+
+        { text: "Empty All",  
+          click : function() {
+                for (var i = 0; i < data.length; i++) {
+                    var row = data[i];
+                    row["newName"] = "";
+                    row["mouseOver"] = "";
+                    row["color"] = "";
+                }
+                grid.invalidate();
+            }
+        } , 
+        {
+            text: "OK",
+            click: function() {
+                Slick.GlobalEditorLock.commitCurrentEdit(); // save currently edited cell to data
+
+                var shortLabels = [];
+                var longLabels = [];
+                var colors = [];
+
+                for (var i = 0; i < data.length; i++) {
+                    var row = data[i];
+                    if (row["newName"]===row["origName"])
+                        shortLabels.push("");
+                    else
+                        shortLabels.push(row["newName"]);
+
+                    longLabels.push(row["mouseOver"]);
+                    colors.push(row["color"]);
+                }
+
+                var fieldMeta = {};
+
+                if (!allEmpty(shortLabels))
+                    fieldMeta["shortLabels"] = shortLabels;
+                if (!allEmpty(longLabels))
+                    fieldMeta["longLabels"] = longLabels;
+                if (!allEmpty(colors))
+                    fieldMeta["colors"] = colors;
+
+                cartOverwrite(db, clusterField, fieldMeta);
+                var metaInfo = db.findMetaInfo(clusterField);
+                renderer.setLabels(metaInfo.ui.shortLabels);
+
+                // only need to update the legend if the current field is shown
+                if (gLegend.type==="meta" && gLegend.metaInfo.name===clusterField) {
+                    //var shortLabels = findMetaInfo(clusterField).ui.shortLabels;
+                    legendUpdateLabels(clusterField);
+                    buildLegendBar();
+                }
+
+                $( this ).dialog( "close" ); 
+                renderer.drawDots();
+            }
+        },
+
+        ];
+
+        showDialogBox(htmls, title, {showClose:true, height:dlgHeight, width:dlgWidth, buttons:buttons});
+
+        var columns = [
+        	{id: "origName", width:100, maxWidth: 200, name: "Orig. Name", field: "origName"},
+        	{id: "newName", width:150, maxWidth: 200, name: "New Name", field: "newName", editor: Slick.Editors.Text},
+        	{id: "mouseOver", width:200, maxWidth: 300, name: "Mouseover Label", field: "mouseOver", editor: Slick.Editors.Text},
+        	//{id: "color", width: 80, maxWidth: 120, name: "Color Code", field: "color", editor: Slick.Editors.Text}
+        ];
+
+	var options = {
+            editable: true,
+	    enableCellNavigation: true,
+	    enableColumnReorder: false,
+            enableAddRow: true,
+            //asyncEditorLoading: false,
+            autoEdit: true
+	};
+
+        var metaInfo = db.findMetaInfo(clusterField);
+
+        var fieldChanges = db.cart[clusterField] || {};
+
+        var shortLabels = fieldChanges["shortLabels"];
+        var longLabels = fieldChanges["longLabels"];
+        var colors = fieldChanges["colors"];
+
+        for (var i = 0; i < metaInfo.valCounts.length; i++) {
+            var shortLabel = "";
+            if (shortLabels)
+                shortLabel = shortLabels[i];
+
+            var longLabel = "";
+            if (longLabels)
+                longLabel = longLabels[i];
+
+            var color = "";
+            if (colors)
+                color = colors[i];
+
+            var valCount = metaInfo.valCounts[i];
+            var valRow = {
+                "origName":valCount[0], 
+                "newName": shortLabel,
+                "mouseOver": longLabel,
+                "color": color
+                };
+            data.push(valRow);
+        }
+
+	var grid = new Slick.Grid("#tpGrid", data, columns, options);
+        grid.setSelectionModel(new Slick.CellSelectionModel());
+        grid.onAddNewRow.subscribe(function (e, args) {
+          var item = args.item;
+          grid.invalidateRow(data.length);
+          data.push(item);
+          grid.updateRowCount();
+          grid.render();
+        });
+    }
+
     function onSelectByIdClick() {
         /* Edit - select cells by ID */
 
@@ -931,26 +1724,25 @@ var cellbrowser = function() {
         var dlgHeight = 500;
         var dlgWidth = 500;
         var htmls = [];
-        var buttons = {
-        "OK" :
-            function() {
+        var buttons = 
+        [
+            {
+            text:"OK", 
+            click : function() {
                 var idListStr = $("#tpIdList").val();
                 idListStr = idListStr.trim().replace(/\r\n/g,"\n");
                 var idList = idListStr.split("\n");
                 var re = new RegExp("\\*");
 
                 var hasWildcards = $("#tpHasWildcard")[0].checked;
-                //if (re.exec(idListStr)!==null)
-                    //hasWildcards = true;
-
-                // first check the IDs
                 db.loadFindCellIds(idList, onSearchDone, onProgressConsole, hasWildcards);
                 }
-        }
+            }
+        ];
 
         htmls.push("<textarea id='tpIdList' style='height:320px;width:400px;display:block'>");
         htmls.push("</textarea><div id='tpNotFoundIds'></div><div id='tpNotFoundHint'></div>");
-        htmls.push("<input id='tpHasWildcard' type='checkbox' style='margin-right: 10px' /> Allow RegEx search<br>e.g. enter '^TH' to find all IDs that start with 'TH'<br>or '-1$' to find all IDs that end with '-1'");
+        htmls.push("<input id='tpHasWildcard' type='checkbox' style='margin-right: 10px' /> Allow RegEx search, e.g. enter '^TH' to find all IDs that <br>start with 'TH' or '-1$' to find all IDs that end with '-1'");
         var title = "Paste a list of IDs (one per line) to select "+gSampleDesc+"s";
         showDialogBox(htmls, title, {showClose:true, height:dlgHeight, width:dlgWidth, buttons:buttons});
     }
@@ -964,26 +1756,40 @@ var cellbrowser = function() {
             var dlgHeight = 500;
 
             var htmls = [];
-            if (selCells===null)
-                htmls.push("No cells are selected. Shown below are the identifiers of all cells visible on the screen.<p>");
+            if (selCells.length===0)
+                htmls.push("Shown below are the identifiers of all "+idList.length+" cells in the dataset.<p><p>");
 
             var idListEnc = encodeURIComponent(idList.join("\n"));
             htmls.push("<textarea style='height:320px;width:350px;display:block'>");
             htmls.push(idList.join("\n"));
             htmls.push("</textarea>");
 
-            var buttons = {
-            "Download as file" : function() {
-                    var blob = new Blob([idList.join("\n")], {type: "text/plain;charset=utf-8"});
-                    saveAs(blob, "identifiers.txt");
+            var buttons = 
+            [
+                {
+                    text:"Download as file", 
+                    click : function() {
+                        var blob = new Blob([idList.join("\n")], {type: "text/plain;charset=utf-8"});
+                        saveAs(blob, "identifiers.txt");
+                    },
                 },
-            "Copy to clipboard" : function() {
-                    $("textarea").select();
-                    document.execCommand('copy');
-                    $( this ).dialog( "close" );
+                {
+                    text:"Copy to clipboard", 
+                    click :function() {
+                        $("textarea").select();
+                        document.execCommand('copy');
+                        $( this ).dialog( "close" );
+                    }
                 }
-            };
-            showDialogBox(htmls, "List of "+idList.length+" selected IDs", {showClose:true, height:dlgHeight, width:400, buttons:buttons});
+            ];
+
+            let title = "List of "+idList.length+" selected IDs";
+            if (selCells.length===0)
+                title = "No cells selected";
+
+            showDialogBox(htmls, title, 
+                {showClose:true, height:dlgHeight, width:500, buttons:buttons}
+                );
         }
 
         db.loadCellIds(selCells, buildExportDialog);
@@ -993,7 +1799,7 @@ var cellbrowser = function() {
     function buildMenuBar() {
         /* draw the menubar at the top */
        var htmls = [];
-       htmls.push("<div id='tpMenuBar'>");
+       htmls.push("<div style='width:"+menuBarHeight+"px' id='tpMenuBar'>");
        htmls.push('<nav class="navbar navbar-default navbar-xs">');
 
        htmls.push('<div class="container-fluid">');
@@ -1023,13 +1829,15 @@ var cellbrowser = function() {
          htmls.push('<li class="dropdown">');
          htmls.push('<a href="#" class="dropdown-toggle" data-toggle="dropdown" data-submenu role="button" aria-haspopup="true" aria-expanded="false">Edit</a>');
          htmls.push('<ul class="dropdown-menu">');
-         htmls.push('<li><a id="tpSelectAll" href="#"><span class="dropmenu-item-label">Select all visible</span><span class="dropmenu-item-content">a</span></a></li>');
-         htmls.push('<li><a id="tpSelectNone" href="#"><span class="dropmenu-item-label">Select none</span><span class="dropmenu-item-content">n</span></a></li>');
+         htmls.push('<li><a id="tpSelectAll" href="#"><span class="dropmenu-item-label">Select all visible</span><span class="dropmenu-item-content">s a</span></a></li>');
+         htmls.push('<li><a id="tpSelectNone" href="#"><span class="dropmenu-item-label">Select none</span><span class="dropmenu-item-content">s n</span></a></li>');
+         htmls.push('<li><a id="tpSelectInvert" href="#"><span class="dropmenu-item-label">Invert selection</span><span class="dropmenu-item-content">s i</span></a></li>');
+         htmls.push('<li><a id="tpSelectName" href="#"><span class="dropmenu-item-label">Name selection...</span><span class="dropmenu-item-content">s s</span></a></li>');
+         htmls.push('<li><a id="tpExportIds" href="#">Export selected...</a></li>');
          htmls.push('<li><a id="tpSelectComplex" href="#"><span class="dropmenu-item-label">Find cells...</span><span class="dropmenu-item-content">f c</span></a></li>');
          //htmls.push('<li><a id="tpMark" href="#"><span class="dropmenu-item-label">Mark selected</span><span class="dropmenu-item-content">h m</span></a></li>');
          //htmls.push('<li><a id="tpMarkClear" href="#"><span class="dropmenu-item-label">Clear marks</span><span class="dropmenu-item-content">c m</span></a></li>');
          htmls.push('<li><a id="tpSelectById" href="#">Find by ID...<span class="dropmenu-item-content">f i</span></a></li>');
-         htmls.push('<li><a id="tpExportIds" href="#">Export selected IDs...</a></li>');
          htmls.push('</ul>'); // View dropdown
          htmls.push('</li>'); // View dropdown
 
@@ -1040,7 +1848,8 @@ var cellbrowser = function() {
          htmls.push('<li><a href="#" id="tpZoomPlus"><span class="dropmenu-item-label">Zoom in</span><span class="dropmenu-item-content">+</span></a></li>');
          htmls.push('<li><a href="#" id="tpZoomMinus"><span class="dropmenu-item-label">Zoom out</span><span class="dropmenu-item-content">-</span></a></li>');
          htmls.push('<li><a href="#" id="tpZoom100Menu"><span class="dropmenu-item-label">Zoom 100%</span><span class="dropmenu-item-content">space</span></a></li>');
-         htmls.push('<li><a href="#" id="tpSplitMenu"><span class="dropmenu-item-label">Split screen</span><span class="dropmenu-item-content">t</span></a></li>');
+         htmls.push('<li><a href="#" id="tpSplitMenu"><span id="tpSplitMenuEntry" class="dropmenu-item-label">Split screen</span><span class="dropmenu-item-content">t</span></a></li>');
+         htmls.push('<li><a href="#" id="tpHeatMenu"><span id="tpHeatMenuEntry" class="dropmenu-item-label">Toggle Heatmap</span><span class="dropmenu-item-content">h</span></a></li>');
 
          htmls.push('<li><hr class="half-rule"></li>');
 
@@ -1076,6 +1885,16 @@ var cellbrowser = function() {
          htmls.push('</li>'); // View dropdown container
 
          htmls.push('<li class="dropdown">');
+         htmls.push('<a href="#" class="dropdown-toggle" data-toggle="dropdown" data-submenu role="button" aria-haspopup="true" aria-expanded="false">Tools</a>');
+         htmls.push('<ul class="dropdown-menu">');
+         htmls.push('<li><a href="#" id="tpRenameClusters">Rename clusters...<span class="dropmenu-item-content"></span></a></li>');
+         htmls.push('<li><a href="#" id="tpCustomAnnots">Remove all custom annotations<span class="dropmenu-item-content"></span></a></li>');
+         //htmls.push('<li><a href="#" id="tpCluster">Run clustering...<span class="dropmenu-item-content"></span></a></li>');
+         htmls.push('</ul>'); // Tools dropdown-menu
+         htmls.push('</li>'); // Tools dropdown container
+
+
+         htmls.push('<li class="dropdown">');
          htmls.push('<a href="#" class="dropdown-toggle" data-toggle="dropdown" data-submenu role="button" aria-haspopup="true" aria-expanded="false">Help</a>');
          htmls.push('<ul class="dropdown-menu">');
          htmls.push('<li><a href="#" id="tpTutorialButton">Tutorial</a></li>');
@@ -1097,6 +1916,7 @@ var cellbrowser = function() {
        //$('#tpOnlySelectedButton').click( onShowOnlySelectedClick );
        $('#tpZoom100Menu').click( onZoom100Click );
        $('#tpSplitMenu').click( onSplitClick );
+       $('#tpHeatMenu').click( onHeatClick );
        $('#tpZoomPlus').click( onZoomInClick );
        $('#tpZoomMinus').click( onZoomOutClick );
        //$('#tpShowAllButton').click( onShowAllClick );
@@ -1106,26 +1926,36 @@ var cellbrowser = function() {
        $('#tpMark').click( onMarkClick );
        $('#tpMarkClear').click( onMarkClearClick );
        $('#tpTutorialButton').click( function()  { showIntro(false); } );
-       $('#tpOpenDatasetLink').click( openDatasetDialog );
+       $('#tpOpenDatasetLink').click( function() { openDatasetDialog(gDatasetList, db.conf); } );
        $('#tpSaveImage').click( onSaveAsClick );
        $('#tpSelectAll').click( onSelectAllClick );
        $('#tpSelectNone').click( onSelectNoneClick );
-       $('#tpSelectComplex').click( onSelectComplexClick );
-       $('#tpDownloadMenu li a').click( onDownloadClick );
+       $('#tpSelectInvert').click( onSelectInvertClick );
+       $('#tpSelectName').click( onSelectNameClick );
+       $('#tpSelectComplex').click( onFindCellsClick );
+
+
+       $('#tpRenameClusters').click( onRenameClustersClick );
+       $('#tpCustomAnnots').click( onCustomAnnotationsClick );
+       //$('#tpCluster').click( onRunClusteringClick );
 
        // This version is more like OSX/Windows:
        // - menus only open when you click on them
        // - once you have clicked, they start to open on hover
        // - a click anywhere else will stop the hovering
        var doHover = false;
-       $(".nav > .dropdown").click( function(){ doHover = true;} );
+       $(".nav > .dropdown").click( function(){ doHover = !doHover; return true;} );
        $(".nav > .dropdown").hover(
            function(event) {
                if (doHover) {
                    $(".dropdown-submenu").removeClass("open"); $(".dropdown").removeClass("open"); $(this).addClass('open');
                }
            });
+
        $(document).click ( function() { doHover= false; });
+
+       // when user releases the mouse outside the canvas, remove the zooming marquee
+       $(document).mouseup ( function(ev) { if (ev.target.nodeName!=="canvas") { renderer.resetMarquee(); }} );
 
        $('[data-submenu]').submenupicker();
 
@@ -1135,35 +1965,56 @@ var cellbrowser = function() {
        /* resize all divs and the renderer to current window size */
        var rendererLeft = metaBarWidth+metaBarMargin;
        var rendererHeight  = window.innerHeight - menuBarHeight - toolBarHeight;
-
+       
        var rendererWidth = window.innerWidth - legendBarWidth - rendererLeft;
        var legendBarLeft = rendererWidth+metaBarMargin+metaBarWidth;
 
-       $("#tpToolBar").css("width", rendererWidth);
-       $("#tpToolBar").css("height", toolBarHeight);
-       $("#tpLeftSidebar").css("height", window.innerHeight - menuBarHeight);
-       $("#tpLegendBar").css("height", window.innerHeight - menuBarHeight);
+       var heatWidth, heatHeight;
+       if (db && db.heatmap) {
+            heatWidth = rendererWidth;
+            heatHeight = db.heatmap.height;
+            rendererHeight = rendererHeight - heatHeight;
+            db.heatmap.setSize(heatWidth, heatHeight);
+            let heatTop = window.innerHeight - heatHeight;
+            db.heatmap.div.style.top = heatTop+"px";
+            db.heatmap.draw();
+       }
+
+       $("#tpToolBar").css("width", rendererWidth+"px");
+
+       $("#tpToolBar").css("height", toolBarHeight+"px");
+       $("#tpLeftSidebar").css("height", (window.innerHeight - menuBarHeight)+"px");
+       $("#tpLegendBar").css("height", (window.innerHeight - menuBarHeight)+"px");
        $('#tpLegendBar').css('left', legendBarLeft+"px");
 
-       renderer.setSize(rendererWidth, rendererHeight, false);
+       renderer.setSize(rendererWidth, rendererHeight, true);
+       
     }
 
-    var progressUrls = [];
+    var progressUrls = {};
 
     function onProgressConsole(ev) {
-        console.log(ev);
+        //console.log(ev);
     }
 
     function onProgress(ev) {
         /* update progress bars. The DOM elements of these were added in maxPlot (not optimal?)  */
         var url = ev.currentTarget.responseURL;
-        if (url.search("exprMatrix.bin")!==-1)
+        url = url.split("?")[0]; // strip off the md5 checksum
+
+        if (url.search("exprMatrix.bin")!==-1) // never show progress bar for single gene vector requests
             return;
 
-        var index = progressUrls.indexOf(url);
-        if (index===-1) {
-            progressUrls.push(url);
-            index = progressUrls.length-1;
+        var progressRowIdx = progressUrls[url]; // there can be multiple progress bars
+        if (progressRowIdx===undefined) {
+            // if there is none yet, find the first free index
+            progressRowIdx = 0;
+            for (var oldUrl in progressUrls) {
+                progressRowIdx = Math.max(progressRowIdx, progressUrls[oldUrl]);
+
+            }
+            progressRowIdx++;
+            progressUrls[url] = progressRowIdx;
         }
 
         var label = url;
@@ -1172,28 +2023,41 @@ var cellbrowser = function() {
         else if (url.endsWith(".bin"))
             label = "Loading cell annotations";
 
-        var labelId = "#mpProgressLabel"+index;
+        var labelId = "#mpProgressLabel"+progressRowIdx;
         $(labelId).html(label);
 
         var percent = Math.round(100 * (ev.loaded / ev.total));
 
-        if (percent===100) {
-            $("#mpProgress"+index).css("width", percent+"%");
-            $("#mpProgress"+index).show(0);
-            progressUrls.splice(index, 1);
-            $("#mpProgressDiv"+index).css("display", "none");
+        if (percent>=99) {
+            $("#mpProgress"+progressRowIdx).css("width", percent+"%");
+            $("#mpProgress"+progressRowIdx).show(0);
+            //progressUrls.splice(index, 1);
+            delete progressUrls[url];
+            $("#mpProgressDiv"+progressRowIdx).css("display", "none");
         }
         else {
-            $("#mpProgress"+index).css("width", percent+"%");
-            $("#mpProgressDiv"+index).css("display", "inherit");
+            $("#mpProgress"+progressRowIdx).css("width", percent+"%");
+            $("#mpProgressDiv"+progressRowIdx).css("display", "inherit");
         }
     }
 
+
     function colorByMetaField(fieldName, doneLoad) {
-       /* load the meta data for a field, setup the colors, send it all to the renderer and call doneLoad */
+        /* load the meta data for a field, setup the colors, send it all to the renderer and call doneLoad */
+        
+        function onMetaArrLoaded(metaArr, metaInfo) {
+            gLegend = buildLegendForMeta(metaInfo);
+            buildLegendBar();
+            var renderColors = legendGetColors(gLegend.rows);
+            renderer.setColors(renderColors); 
+            renderer.setColorArr(metaArr); 
+            metaInfo.arr = metaArr;
+            doneLoad();
+        }
+       
        if (doneLoad===undefined)
            doneLoad = function() { renderer.drawDots(); };
-
+        
        if (fieldName===null) {
            // obscure hacky option: you can set the default color field to "None"
            // so there is no coloring at all on startup
@@ -1201,43 +2065,50 @@ var cellbrowser = function() {
            var cellCount = db.conf.sampleCount;
            renderer.setColorArr(new Uint8Array(cellCount));
            gLegend.rows = [];
-           gLegend.rows.push( [ "000000", null, "No Value", cellCount, 0, null] );
+           gLegend.rows.push( { 
+                   color:"000000", defColor:null, label:"No Value", 
+                   count:cellCount, intKey:0, strKey:null
+           } );
            doneLoad();
            return;
        }
 
-       var fieldIdx  = db.fieldNameToIndex(fieldName);
+       var metaInfo  = db.findMetaInfo(fieldName);
        console.log("Color by meta field "+fieldName);
+
+       var defaultMetaField = db.getDefaultColorField()[1];
 
        // internal field names cannot contain non-alpha chars, so tolerate user errors here
        // otherwise throw an error
-       if (fieldIdx === null) {
-           fieldIdx = db.fieldNameToIndex(fieldName.replace(/[^0-9a-z]/gi, ''));
-           if (fieldIdx === null) {
+       if (metaInfo === null) {
+           metaInfo = db.findMetaInfo(fieldName.replace(/[^0-9a-z]/gi, ''));
+           if (metaInfo === null) {
                alert("The field "+fieldName+" does not exist in the sample/cell annotations. Cannot color on it.");
-               return;
+               metaInfo = db.findMetaInfo(defaultMetaField);
            }
        }
 
-       var fieldInfo = db.getMetaFields()[fieldIdx];
-
-       if (fieldInfo.diffValCount > MAXCOLORCOUNT && fieldInfo.binMethod===undefined) {
-           warn("This field has "+fieldInfo.diffValCount+" different values. Coloring on a field that has more than "+MAXCOLORCOUNT+" different values is not supported.");
+       if (metaInfo.type==="uniqueString") {
+           warn("This field contains a unique identifier. You cannot color on such a field. However, you can search for values in this field using 'Edit > Find by ID'.");
            return null;
        }
 
-       var defaultMetaField = db.getDefaultColorField()[1];
-       if (fieldName===defaultMetaField)
+       if (metaInfo.diffValCount > MAXCOLORCOUNT && metaInfo.type==="enum") {
+           warn("This field has "+metaInfo.diffValCount+" different values. Coloring on a field that has more than "+MAXCOLORCOUNT+" different values is not supported.");
+           return null;
+       }
+
+        
+        if (fieldName===defaultMetaField)
            changeUrl({"meta":null, "gene":null});
-       else
+        else
            changeUrl({"meta":fieldName, "gene":null});
 
-
-       buildLegendForMetaIdx(fieldIdx);
-       var renderColors = legendGetColors(gLegend.rows);
-       renderer.setColors(renderColors);
-
-       db.loadMetaVec(fieldIdx, function(carr) {renderer.setColorArr(carr); doneLoad(); } , onProgress);
+        if (metaInfo.arr) // eg custom fields
+            onMetaArrLoaded(metaInfo.arr, metaInfo);
+        else
+            db.loadMetaVec(metaInfo, onMetaArrLoaded, onProgress);
+    
 
        //changeUrl({"gene":null, "meta":fieldName});
        changeUrl({"pal":null});
@@ -1277,11 +2148,11 @@ var cellbrowser = function() {
         var arr2 = [];
 
         // code duplication, not very elegant, but avoids creating an array just for the indices
-        if (selCells===null)
+        if (selCells.length===0)
             // the version if no cells are selected
             for (var cellIdx = 0; cellIdx < exprVec.length; cellIdx++) {
                 var val = exprVec[cellIdx];
-                if (splitArr[cellIdx]==0)
+                if (splitArr[cellIdx]===0)
                     arr1.push(val);
                 else
                     arr2.push(val);
@@ -1289,9 +2160,9 @@ var cellbrowser = function() {
         else
             // the version with a cell selection
             for (var i = 0; i < selCells.length; i++) {
-                var cellIdx = selCells[i];
-                var val = exprVec[cellIdx];
-                if (splitArr[cellIdx]==0)
+                let cellIdx = selCells[i];
+                let val = exprVec[cellIdx];
+                if (splitArr[cellIdx]===0)
                     arr1.push(val);
                 else
                     arr2.push(val);
@@ -1379,7 +2250,7 @@ var cellbrowser = function() {
 
         var yLabel = null;
         if (db.conf.unit===undefined && db.conf.matrixArrType==="Uint32")
-            yLabel = "read/UMI count"
+            yLabel = "read/UMI count";
         if (db.conf.unit!==undefined)
             yLabel = db.conf.unit;
 
@@ -1396,13 +2267,14 @@ var cellbrowser = function() {
 
     function buildViolinFromMeta(exprVec, metaName, selCells) {
         /* load a binary meta vector, split the exprVector by it and make two violin plots, one meta value vs the other.  */
-        var metaInfo = findMetaInfo(metaName);
+        var metaInfo = db.findMetaInfo(metaName);
         if (metaInfo.valCounts.length!==2) {
             alert("Config error: meta field in 'violinField', '"+db.conf.violinField+"' does not have two distinct values.");
             return;
         }
+
         var labelList = [metaInfo.valCounts[0][0], metaInfo.valCounts[1][0]];
-        db.loadMetaVec( metaInfo.index,
+        db.loadMetaVec( metaInfo,
                 function(metaArr) {
                     var dataList = splitExprByMeta(exprVec, metaArr, selCells);
                     buildViolinFromValues(labelList, dataList);
@@ -1428,11 +2300,11 @@ var cellbrowser = function() {
         var selCells = renderer.getSelection();
         // if we have a violin meta field to split on, make two violin plots, one meta vs, the other meta
         // restrict the plot to the selected cells, if any
-        if (db.conf.violinField!=undefined) {
+        if (db.conf.violinField!==undefined) {
             buildViolinFromMeta(exprVec, db.conf.violinField, selCells);
         } else {
             // there is no violin field
-            if (selCells===null || selCells.length===0) {
+            if (selCells.length===0) {
                 // no selection, no violinField: default to a single violin plot
                 dataList = [Array.prototype.slice.call(exprVec)];
                 labelList = ['All cells'];
@@ -1451,16 +2323,18 @@ var cellbrowser = function() {
     }
 
     function selectizeSetValue(selector, name) {
-            /* little convenience method to set a selective dropdown to a given value */
+            /* little convenience method to set a selective dropdown to a given value. does not trigger the change event. */
         if (name===undefined)
             return;
         var sel = $(selector)[0].selectize;
-        sel.addOption({text: name, value: name});
-        sel.setTextboxValue(name);
-        sel.refreshOptions();
+        sel.addOption({id: name, text: name});
+        //sel.refreshOptions();
+        //sel.setTextboxValue(name);
+        sel.setValue(name, 1); // 1 = do not fire change
+        //sel.close();
         // update the <select> element
-        $(selector).empty();
-        $(selector).append($('<option>', { value: name, text : name}));
+        //$(selector).empty();
+        //$(selector).append($('<option>', { value: name, text : name}));
         //sel.setValue(name, true);
     }
 
@@ -1470,15 +2344,13 @@ var cellbrowser = function() {
             onDone = function() { renderer.drawDots(); };
 
         function gotGeneVec(exprArr, decArr, geneSym, geneDesc, binInfo) {
-            /* called when the expression vector has been loaded */
+            /* called when the expression vector has been loaded and binning is done */
             if (decArr===null)
                 return;
             console.log("Received expression vector, gene "+geneSym+", geneId "+geneDesc);
             _dump(binInfo);
             makeLegendExpr(geneSym, geneDesc, binInfo, exprArr, decArr);
-            //if (db.quickExpr===undefined)
-                //db.quickExpr = {};
-            //db.quickExpr[geneSym] = [exprArr, geneDesc, binInfo];
+
             renderer.setColors(legendGetColors(gLegend.rows));
             renderer.setColorArr(decArr);
             buildLegendBar();
@@ -1491,7 +2363,7 @@ var cellbrowser = function() {
             for (var i = 0; i < gRecentGenes.length; i++) {
                 // remove previous gene entry with the same symbol
                 if (gRecentGenes[i][0]===geneSym) {
-                    gRecentGenes.splice(i, i);
+                    gRecentGenes.splice(i, 1);
                     break;
                 }
             }
@@ -1503,18 +2375,81 @@ var cellbrowser = function() {
 
         changeUrl({"gene":geneSym, "meta":null, "pal":null});
         console.log("Loading gene expression vector for "+geneSym);
-        db.loadExprAndDiscretize(geneSym, gotGeneVec, onProgress, exprBinCount);
+        db.loadExprAndDiscretize(geneSym, gotGeneVec, onProgress);
 
         // clear the meta combo
         $('#tpMetaCombo').val(0).trigger('chosen:updated');
     }
 
-   function gotCoords(coords, info, clusterMids) {
+   function gotCoords(coords, info, clusterInfo, newRadius) {
        /* called when the coordinates have been loaded */
        if (coords.length===0)
            alert("cellBrowser.js/gotCoords: coords.bin seems to be empty");
-       renderer.setCoords(coords, clusterMids, info.minX, info.maxX, info.minY, info.maxY);
+       var opts = {};
+       if (newRadius)
+           opts["radius"] = newRadius;
+
+       // labels can be overriden by the user cart
+       var labelField = db.conf.labelField;
+       var metaInfo = db.findMetaInfo(labelField);
+       var oldToNew = makeLabelRenames(metaInfo);
+       var origLabels = [];
+       var clusterMids = clusterInfo.labels;
+       // old-style files contain just coordinates, no order
+       if (clusterMids===undefined)
+           clusterMids = clusterInfo;
+
+       for (var i = 0; i < clusterMids.length; i++) {
+           var labelInfo = clusterMids[i];
+           var oldName = labelInfo[2];
+           origLabels.push(oldName);
+           var newName = oldToNew[oldName];
+           labelInfo[2] = newName;
+       }
+
+       db.clusterOrder = clusterInfo.order;
+
+       renderer.origLabels = origLabels;
+
+       renderer.setCoords(coords, clusterMids, info.minX, info.maxX, info.minY, info.maxY, opts);
    }
+
+   function colorByDefaultField(onDone) {
+       /* get the default coloring field from the config or the URL and start coloring by it.
+        * Call onDone() when done. */
+       var colorByInfo = db.getDefaultColorField();
+       var colorType = colorByInfo[0];
+       var colorBy = colorByInfo[1];
+
+       // allow to override coloring by URL args
+       if (getVar("gene")!==undefined) {
+           colorType = "gene";
+           colorBy = getVar("gene");
+           activateTab("gene");
+       }
+       else if (getVar("meta")!==undefined) {
+           colorType = "meta";
+           colorBy = getVar("meta");
+           activateTab("meta");
+       }
+       gLegend = {};
+       if (colorType==="meta") {
+           colorByMetaField(colorBy, onDone);
+           // update the meta field combo box
+           var fieldIdx  = db.fieldNameToIndex(onlyAlphaNum(colorBy));
+           if (fieldIdx===null) {
+               alert("Default coloring is configured to be on field "+fieldName+
+                    " but cannot find a field with this name, using field 1 instead.");
+               fieldIdx = 1;
+           }
+
+           $('#tpMetaCombo').val(fieldIdx).trigger('chosen:updated');
+           $('#tpMetaBox_'+db.getMetaFields()[fieldIdx].name).addClass('tpMetaSelect');
+       }
+       else {
+           loadGeneAndColor(colorBy, onDone);
+       }
+    }
 
     function renderData() {
     /* init the renderer, start loading and draw data when ready
@@ -1538,6 +2473,9 @@ var cellbrowser = function() {
                    renderer.setColors(legendGetColors(gLegend.rows));
 
                renderer.setTitle("Dataset: "+db.conf.shortLabel);
+
+
+               
                if (selList)
                    findCellsMatchingQueryList(selList, function (cellIds) {
                         renderer.selectSet(cellIds);
@@ -1571,13 +2509,14 @@ var cellbrowser = function() {
            var radius = dbConf.radius;
            var alpha = dbConf.alpha;
 
-           if (radius===undefined || alpha===undefined)
+           if (radius===undefined || alpha===undefined) {
                var radiusAlpha = guessRadiusAlpha(dotCount);
 
-           if (radius===undefined)
-               radius = radiusAlpha[0];
-           if (alpha===undefined)
-               alpha = radiusAlpha[1];
+               if (radius===undefined)
+                   radius = radiusAlpha[0];
+               if (alpha===undefined)
+                   alpha = radiusAlpha[1];
+            }
 
            rendConf["radius"] = radius;
            rendConf["alpha"] = alpha;
@@ -1597,43 +2536,23 @@ var cellbrowser = function() {
        renderer.initPlot(rendConf);
 
        buildLeftSidebar();
-       buildToolBar(db.conf.coords, db.conf.name, metaBarWidth+metaBarMargin, toolBarHeight);
+       buildToolBar(db.conf.coords, db.conf, metaBarWidth+metaBarMargin, menuBarHeight);
        //activateMode("move");
 
        db.loadCoords(0, gotFirstCoords, onProgress);
 
-       var colorByInfo = db.getDefaultColorField();
-       var colorType = colorByInfo[0];
-       var colorBy = colorByInfo[1];
-
-       // allow to override coloring by URL args
-       if (getVar("gene")!==undefined) {
-           colorType = "gene";
-           colorBy = getVar("gene");
-           activateTab("gene");
-       }
-       else if (getVar("meta")!==undefined) {
-           colorType = "meta";
-           colorBy = getVar("meta");
-           activateTab("meta");
-       }
        if (getVar("select")!==undefined) {
            selList = JSURL.parse(getVar("select"));
        }
 
-       gLegend = {};
-       if (colorType==="meta") {
-           colorByMetaField(colorBy, doneOnePart);
-           // update the meta field combo box
-           var fieldIdx  = db.fieldNameToIndex(colorBy);
-           $('#tpMetaCombo').val(fieldIdx).trigger('chosen:updated');
-       }
-       else {
-           loadGeneAndColor(colorBy, doneOnePart);
-       }
+       colorByDefaultField(doneOnePart);
 
        if (db.conf.quickGenes)
-           db.preloadGenes(db.conf.quickGenes, function() { updateGeneTableColors(null); }, onProgressConsole, exprBinCount);
+           db.preloadGenes(db.conf.quickGenes, function() { 
+               updateGeneTableColors(null); 
+               if (getVar("heat")==="1")
+                   onHeatClick();
+            }, onProgressConsole);
        db.preloadAllMeta();
     }
 
@@ -1655,11 +2574,11 @@ var cellbrowser = function() {
 
         if (sortBy==="name") {
             // index 2 is the label
-            rows.sort(function(a, b) { return naturalSort(a[2], b[2]); });
+            rows.sort(function(a, b) { return naturalSort(a.label, b.label); });
         }
         else {
             // sort this list by count = index 3
-            rows.sort(function(a, b) { return b[3] - a[3]; }); // reverse-sort by count
+            rows.sort(function(a, b) { return b.count - a.count; }); // reverse-sort by count
         }
         buildLegendBar();
     }
@@ -1750,7 +2669,6 @@ var cellbrowser = function() {
         renderer.zoom100();
         renderer.drawDots();
         $("#tpZoom100Button").blur(); // remove focus
-        //#$("#tpZoom100Button").tooltip('hide');
         ev.preventDefault();
         return false;
     }
@@ -1775,6 +2693,8 @@ var cellbrowser = function() {
 
     function onWindowResize(ev) {
         /* called when window is resized by user */
+        if (ev.target.id==="tpHeat") // hack: do not do anything if jquery resizable() started this.
+            return;
         resizeDivs();
     }
 
@@ -1796,12 +2716,14 @@ var cellbrowser = function() {
             htmls.push("<button type='button' class='btn btn-default dropdown-toggle' data-toggle='dropdown' aria-haspopup='true' aria-expanded='false' id='tpChangeColorScheme'>Colors&nbsp;<span class='caret'> </span></button>");
             htmls.push('<ul class="dropdown-menu pull-right">');
             htmls.push('<li><a class="tpColorLink" data-palette="default" href="#">Reset to Default</a></li>');
-            htmls.push('<li><a class="tpColorLink" data-palette="rainbow" href="#">Rainbow Qualitative</a></li>');
-            htmls.push('<li><a class="tpColorLink" data-palette="tol-dv" href="#">Paul Tol&#39;s Qualitative</a></li>');
-            htmls.push('<li><a class="tpColorLink" data-palette="blues" href="#">Shades of Blues</a></li>');
-            htmls.push('<li><a class="tpColorLink" data-palette="reds" href="#">Shades of Reds</a></li>');
-            htmls.push('<li><a class="tpColorLink" data-palette="tol-sq" href="#">Beige to red</a></li>');
-            htmls.push('<li><a class="tpColorLink" data-palette="tol-rainbow" href="#">Blue to red</a></li>');
+            htmls.push('<li><a class="tpColorLink" data-palette="rainbow" href="#">Qualitative: Rainbow</a></li>');
+            htmls.push('<li><a class="tpColorLink" data-palette="tol-dv" href="#">Qualitative: Paul Tol&#39;s</a></li>');
+            htmls.push('<li><a class="tpColorLink" data-palette="cb-Paired" href="#">Qualitative: paired</a></li>');
+            htmls.push('<li><a class="tpColorLink" data-palette="cb-Set3" href="#">Qualitative: pastel</a></li>');
+            htmls.push('<li><a class="tpColorLink" data-palette="blues" href="#">Gradient: shades of blue</a></li>');
+            htmls.push('<li><a class="tpColorLink" data-palette="reds" href="#">Gradient: shades of red</a></li>');
+            htmls.push('<li><a class="tpColorLink" data-palette="tol-sq-blue" href="#">Gradient: beige to red</a></li>');
+            htmls.push('<li><a class="tpColorLink" data-palette="tol-rainbow" href="#">Gradient: blue to red</a></li>');
             htmls.push('</ul>');
         htmls.push("</div>"); // btn-group
         //htmls.push("</div>"); // tpToolbarButtons
@@ -1846,24 +2768,39 @@ var cellbrowser = function() {
     function legendGetColors(rows) {
     /* go over the legend lines: create an array of colors in the order of their meta value indexes.
      * (the values in the legend may be sorted not in the order of their internal indices) */
+        if (rows===undefined)
+            return [];
+
         var colArr = [];
         for (var i = 0; i < rows.length; i++) {
             var row = rows[i];
-            var col = row[0];
+            var col = row.color;
             if (col===null)
-                col = row[1]; // only use default color if nothing else set
+                col = row.defColor; // only use default color if nothing else set
 
-            var idx = row[4]; // 4 = meta val index or expression bin XX
+            var idx = row.intKey;
             colArr[idx] = col; // 0 = color
         }
 
         return colArr;
     }
 
+    function legendUpdateLabels(fieldName) {
+        /* re-copy the labels into the legend rows */
+        // format of rows is: defColor, currColor, label, count, valueIndex, uniqueKey
+        var shortLabels = db.findMetaInfo(fieldName).ui.shortLabels;
+        var rows = gLegend.rows;
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var valIdx = row.intKey;
+            var shortLabel = shortLabels[valIdx];
+            row.label = shortLabel;
+        }
+    }
+
     function legendChangePaletteAndRebuild(palName) {
         /* change the legend color palette and put it into the URL */
-        var rows = gLegend.rows;
-        var success = legendSetPalette(gLegend, palName, gLegend.metaFieldIdx);
+        var success = legendSetPalette(gLegend, palName);
         if (success) {
             if (palName==="default")
                 changeUrl({"pal":null});
@@ -1875,18 +2812,21 @@ var cellbrowser = function() {
         }
     }
 
-    function legendSetPalette(legend, origPalName, metaFieldIndex) {
+    function legendSetColors(legend, colors) {
+        var rows = legend.rows;
+        for (let i = 0; i < rows.length; i++) {
+            //rows[i][1] = colors[i];
+            rows[i].color = colors[i];
+        }
+    }
+
+    function legendSetPalette(legend, origPalName) {
     /* update the defColor [1] attribute of all legend rows. pal is an array of hex colors.
-     * metaFieldIndex is optional. If it is set, will use the predefined colors that are
-     * in the field configuration.
+     * Will use the predefined colors that are
+     * in the legend.metaInfo.colors configuration, if present.
      * */
         var palName = origPalName;
-
-        //palName = getVar("pal", palName);
-
         if (origPalName==="default") {
-            legendResetColors();
-            //changeUrl({"pal":null});
             if (legend.rowType==="category")
                 palName = cDefQualPalette;
             else
@@ -1897,9 +2837,11 @@ var cellbrowser = function() {
         var n = rows.length;
         var pal = null;
         var usePredefined = false;
+
+        pal = makeColorPalette(palName, n);
         // if this is a field for which colors were defined manually, use them
-        if (metaFieldIndex!==undefined && db.conf.metaFields[metaFieldIndex].colors!==undefined && origPalName==="default") {
-            pal = db.conf.metaFields[metaFieldIndex].colors;
+        if (legend.metaInfo!==undefined && legend.metaInfo.colors!==undefined && origPalName==="default") {
+            copyNonNull(legend.metaInfo.colors, pal);
             usePredefined = true;
         } else
             pal = makeColorPalette(palName, n);
@@ -1909,9 +2851,7 @@ var cellbrowser = function() {
             return false;
         }
 
-        for (var i = 0; i < rows.length; i++) {
-            rows[i][1] = pal[i];
-        }
+        legendSetColors(legend, pal);
         legend.palName = palName;
 
         // update the dropdown menu
@@ -1923,59 +2863,89 @@ var cellbrowser = function() {
         return true;
     }
 
+     function labelForBinMinMax(binMin, binMax, isAllInt) {
+        /* given the min/max of a numeric value bin, return a good legend for it */
+        // pretty print the numbers
+        var minDig = 2;
+        //if (binMin % 1 === 0) // % 1 = fractional part
+            //minDig = 0
+
+        var maxDig = 2;
+        //if (binMin % 1 === 0)
+         //   maxDig = 0
+
+        
+        if (isAllInt) {
+            minDig = 0;
+            maxDig = 0
+        }
+
+        var legLabel = "";
+        if (binMax===0 && binMax===0)
+            legLabel = "0";
+        else if (binMin==="Unknown")
+            legLabel = "Unknown";
+        else if (binMin!==binMax)
+            legLabel = binMin.toFixed(minDig)+' - '+binMax.toFixed(maxDig);
+        else
+            legLabel = binMin.toFixed(minDig);
+        return legLabel;
+    }
+
     function makeLegendRowsNumeric(binInfo) {
         /* return an array of legend lines given bin info from gene expression or a numeric meta field  */
         var legendRows = [];
-        //var zeroIsGrey = false;
 
-        // special case for the first "0" element = no value, make this always grey
-        //var bin0Min = binInfo[0][0];
-        //var bin0Max = binInfo[0][1];
-        //if (bin0Min===0 && bin0Max===0)
-            //zeroIsGrey = true;
+        // figure out if all our ranges are integers
+        var isAllInt = true;
+        for (var binIdx = 0; binIdx < binInfo.length; binIdx++) {
+            let oneBin = binInfo[binIdx];
+            var binMin = oneBin[0];
+            var binMax = oneBin[1];
 
-        //var defColors = makeColorPalette(10, true, zeroIsGrey);
+            var restMin = binMin - Math.trunc(binMin);
+            var restMax = binMax - Math.trunc(binMax);
+            if (restMin!==0 || restMax!==0)
+                isAllInt = false;
+        }
+
         var colIdx = 0;
         for (var binIdx = 0; binIdx < binInfo.length; binIdx++) {
-            var binMin = binInfo[binIdx][0];
-            var binMax = binInfo[binIdx][1];
+            let oneBin = binInfo[binIdx];
 
-            var count  = binInfo[binIdx][2];
+            var binMin = oneBin[0];
+            var binMax = oneBin[1];
+            var count  = oneBin[2];
+
             var legendId = binIdx;
 
-            // pretty print the numbers
-            var minDig = 2;
-            //if (binMin % 1 === 0) // % 1 = fractional part
-                //minDig = 0
-
-            var maxDig = 2;
-            //if (binMin % 1 === 0)
-             //   maxDig = 0
-
-            var legLabel = null;
-            if (binMin==="Unknown")
-                legLabel = "Unknown";
-            else if (binMin!==binMax)
-                legLabel = binMin.toFixed(minDig)+' - '+binMax.toFixed(maxDig);
-            else
-                legLabel = binMin.toFixed(minDig);
+            var legLabel = labelForBinMinMax(binMin, binMax, isAllInt);
 
             var uniqueKey = legLabel;
-            var legColor = null;
-
+         
             // override any color with the color specified in the current URL
             var savKey = COL_PREFIX+legLabel;
             var legColor = getVar(savKey, null);
 
             if (binMin===0 && binMax===0) {
-                legLabel = "No Value";
+                uniqueKey = "noExpr";
+                legColor = cNullColor;
+            }
+            else if (binMin==="Unknown" && binMax==="Unknown") {
                 uniqueKey = "noExpr";
                 legColor = cNullColor;
             }
             else
                 colIdx++;
 
-            legendRows.push( [ legColor, null, legLabel, count, binIdx, uniqueKey] );
+            legendRows.push( {
+                "color": legColor, 
+                "defColor":null, 
+                "label":legLabel, 
+                "count":count, 
+                "intKey":binIdx, 
+                "strKey":uniqueKey
+            });
         }
         return legendRows;
     }
@@ -1989,6 +2959,8 @@ var cellbrowser = function() {
         var legendRows = makeLegendRowsNumeric(binInfo);
         var colors = legendGetColors(legendRows);
 
+        gLegend = {};
+        gLegend.type = "expr";
         gLegend.rows = legendRows;
         gLegend.title = "Gene: "+geneSym;
         gLegend.titleHover = geneId;
@@ -2030,9 +3002,9 @@ var cellbrowser = function() {
         var geneSym = null;
         var quickGenes = db.conf.quickGenes;
         if (quickGenes)
-            geneSym = alphaNumSearch(quickGenes, saneSym)
+            geneSym = alphaNumSearch(quickGenes, saneSym);
         if (geneSym===null)
-            geneSym = alphaNumSearch(gRecentGenes, saneSym)
+            geneSym = alphaNumSearch(gRecentGenes, saneSym);
 
         loadGeneAndColor(geneSym);
         event.stopPropagation();
@@ -2060,12 +3032,12 @@ var cellbrowser = function() {
         if (options.buttons!==undefined)
             dialogOpts["buttons"] =  options.buttons;
         else
-            dialogOpts["buttons"] =  {};
+            dialogOpts["buttons"] =  [];
 
+        if (options.showClose!==undefined)
+            dialogOpts["buttons"].unshift({ text:"Cancel", click:function() { $( this ).dialog( "close" ); }});
         if (options.showOk!==undefined)
-            dialogOpts["buttons"].OK = function() { $( this ).dialog( "close" ); };
-        if (options.showClose!=undefined)
-            dialogOpts["buttons"].Cancel = function() { $( this ).dialog( "close" ); };
+            dialogOpts["buttons"].push({ text: "OK", click:function() { $( this ).dialog( "close" ); }});
         //dialogOpts["position"] = "center";
         //dialogOpts["height"] = "auto";
         //dialogOpts["width"] = "auto";
@@ -2088,7 +3060,7 @@ var cellbrowser = function() {
         //htmls.push("<button style='float:center;' id='tpGeneDialogOk' class='ui-button ui-widget ui-corner-all'>OK</button>");
         //htmls.push("</div>");
         //htmls.push("</div>");
-        var buttons = {"OK" : onGeneDialogOkClick };
+        var buttons = [{text:"OK", click:onGeneDialogOkClick}];
         showDialogBox(htmls, "Genes of interest", {height: 500, width:400, buttons:buttons});
 
         $('#tpGeneDialogOk').click ( onGeneDialogOkClick );
@@ -2112,7 +3084,7 @@ var cellbrowser = function() {
         var geneCount = gLoad_geneList.length;
         var cellIdCount = cellIds.length;
         for (var i = 0; i < cellIdCount; i++) {
-            cellId = cellIds[i];
+            let cellId = cellIds[i];
             newExprData[cellId] = new Float32Array(gLoad_geneList); // XX or a = [] + a.length = x ?
         }
 
@@ -2130,7 +3102,7 @@ var cellbrowser = function() {
             newDeciles[geneSym] = deciles;
 
             for (var cellI = 0; cellI < cellIdCount; cellI++) {
-                cellId = cellIds[cellI];
+                let cellId = cellIds[cellI];
                 newExprData[cellId][geneI] = geneVec[cellI];
             }
         }
@@ -2269,7 +3241,7 @@ var cellbrowser = function() {
         var htmls = [];
         htmls.push("<div id='tpGeneProgress'><div class='tpProgressLabel' id='tpProgressLabel'>Loading...</div></div>");
 
-        if (notFoundGenes.length!=0) {
+        if (notFoundGenes.length!==0) {
             htmls.push("<div id='tpNotFoundGenes'>Could not find the following gene symbols: ");
             htmls.push(notFoundGenes.join(", "));
             htmls.push("</div>");
@@ -2281,7 +3253,7 @@ var cellbrowser = function() {
             //showDialogBox(htmls, "Warning", 400);
         }
 
-        var showOk = (notFoundGenes.length!=0);
+        var showOk = (notFoundGenes.length!==0);
         showDialogBox(htmls, "Downloading expression data", {width:350, showOk:true});
 
         var progressLabel = $( "#tpProgressLabel" );
@@ -2292,7 +3264,7 @@ var cellbrowser = function() {
 
     }
 
-    function buildGeneTable(htmls, divId, title, subtitle, geneInfos) {
+    function buildGeneTable(htmls, divId, title, subtitle, geneInfos, noteStr) {
     /* create gene expression info table. if htmls is null, update DIV with divId in-place. */
         var doUpdate = false;
         if (htmls===null) {
@@ -2321,7 +3293,9 @@ var cellbrowser = function() {
         htmls.push("<div id='"+divId+"'>");
 
         if (geneInfos===undefined || geneInfos===null || geneInfos.length===0) {
-            htmls.push("</div>")
+            if (noteStr!==undefined)
+                htmls.push(noteStr);
+            htmls.push("</div>");
             return;
         }
 
@@ -2329,17 +3303,20 @@ var cellbrowser = function() {
         //htmls.push('<td><button id="tpChangeGenes" title="Change the list of genes that are displayed in this table" class = "ui-button ui-widget ui-corner-all" style="width:95%">Change</button></td>');
 
         var colsPerRow = Math.round(tableWidth / cellWidth);
-        var cellWidth = Math.round(tableWidth/colsPerRow);
+        cellWidth = Math.round(tableWidth/colsPerRow);
 
         var currWidth = 1;
-        for (var i = 0; i < geneInfos.length; i++) {
+        var i = 0;
+        while (i < geneInfos.length) {
             var geneInfo = geneInfos[i];
             var geneId   = geneInfo[0];
             var geneDesc = geneInfo[1];
-            if (((i % colsPerRow) == 0) && (i!=0)) {
+            if (((i % colsPerRow) === 0) && (i!==0)) {
                 htmls.push("</tr><tr>");
             }
-            htmls.push('<td title="'+geneDesc+'" id="tpGeneBarCell_'+onlyAlphaNum(geneId)+'" class="tpGeneBarCell">'+geneId+'</td>');
+            if (geneId in db.geneOffsets)
+                htmls.push('<td title="'+geneDesc+'" id="tpGeneBarCell_'+onlyAlphaNum(geneId)+'" class="tpGeneBarCell">'+geneId+'</td>');
+            i++;
         }
         htmls.push("</tr></table>");
         htmls.push("</div>"); // divId
@@ -2363,95 +3340,125 @@ var cellbrowser = function() {
         var binMethod = fieldInfo.binMethod;
         if (binMethod==="uniform") {
             // old method, not used anymore
-            var binMin = fieldInfo.minVal;
+            let binMin = fieldInfo.minVal;
             var stepSize = fieldInfo.stepSize;
-            var binCounts = fieldInfo.binCounts;
-            var binCount = fieldInfo.binCounts.length;
+            let binCounts = fieldInfo.binCounts;
+            let binCount = fieldInfo.binCounts.length;
             for (var i=0; i<binCount; i++) {
                 binInfo.push( [binMin, binMin+stepSize, binCounts[i]] );
                 binMin+=stepSize;
             }
         } else if (binMethod==="quantiles") {
-            var binMin = fieldInfo.minVal;
-            var breaks = fieldInfo.breaks;
-            var binCounts = fieldInfo.binCounts;
-            var binCountsLen = fieldInfo.binCounts.length;
-            var binIdx = 0;
-            if (breaks[0]=="Unknown") {
+            // newer method for pre-quantified fields
+            let binMin = fieldInfo.minVal;
+            let breaks = fieldInfo.breaks;
+            let binCounts = fieldInfo.binCounts;
+            let binCountsLen = fieldInfo.binCounts.length;
+            let binIdx = 0;
+            if (breaks[0]==="Unknown") {
                 binInfo.push( ["Unknown", "Unknown", binCounts[0]] );
                 binIdx = 1;
             }
 
             for (; binIdx<binCountsLen; binIdx++) {
-                var binMin = breaks[binIdx];
-                var binMax = breaks[binIdx+1];
-                var binCount = binCounts[binIdx];
+                let binMin = breaks[binIdx];
+                let binMax = breaks[binIdx+1];
+                let binCount = binCounts[binIdx];
                 binInfo.push( [binMin, binMax, binCount] );
             }
         }
         else if (binMethod==="raw") {
             // no binning was done at all, this happens when there are not enough distinct values
-            var values = fieldInfo.values;
-            var binCounts = fieldInfo.binCounts;
-            for (var i=0; i<values.length; i++) {
-                var value = values[i];
-                var valCount = binCounts[i];
+            let values = fieldInfo.values;
+            let binCounts = fieldInfo.binCounts;
+            for (let i=0; i<values.length; i++) {
+                let value = values[i];
+                let valCount = binCounts[i];
                 binInfo.push( [value, value, valCount] );
             }
         }
         else 
-            alert("invalid value for meta field binMethod: "+binMethod); 
+            // these days, we don't pre-quantify anymore. The binning is done on the client now
+            // and the meta loading function adds the bin info to the field info object
+            //alert("invalid value for meta field binMethod: "+binMethod); 
+            binInfo = fieldInfo.binInfo;
 
         return binInfo;
     }
 
-    function makeLegendMeta(metaIndex, sortBy) {
-    /* Build a new gLegend object and return it */
+    function getFieldColors(metaInfo) {
+        /* return a list with the color codes for a field, taking into account field type and cart settings */
+        
+        let palName = metaInfo.ui.palette;
+        let colCount;
+        if (!palName)
+            if (metaInfo.type==="int" || metaInfo.type==="float") {
+                palName = cDefGradPalette;
+                colCount = exprBinCount+1; // +1 because <unknown> is a special bin
+            }
+            else {
+                palName = cDefQualPalette;
+                colCount = metaInfo.valCounts.length;
+            }
+
+        var colors = makeColorPalette(palName, colCount);
+
+        let colOverrides = metaInfo.ui.colors;
+        if (colOverrides)
+            for (let i=0; i<colOverrides.length; i++)
+                if (colOverrides[i])
+                    colors[i] = colOverrides[i];
+    
+        return colors;
+    }
+
+    function makeLegendMeta(metaInfo, sortBy) {
+    /* Build a new legend object and return it */
         var legend = {};
         legend.type = "meta";
-        legend.metaFieldIdx = metaIndex;
+        //legend.metaFieldIdx = metaIndex;
         legend.titleHover = null;
 
-        var fieldInfo = db.getMetaFields()[metaIndex];
-        legend.fieldName = fieldInfo.label;
-        legend.title = legend.fieldName.replace(/_/g, " ");
+        //var metaInfo = db.getMetaFields()[metaIndex];
+        //legend.fieldLabel = metaInfo.label;
+        legend.title = metaInfo.label.replace(/_/g, " ");
+        legend.metaInfo = metaInfo;
 
         // numeric meta fields are a special case
-        if (fieldInfo.type==="int" || fieldInfo.type==="float") {
-            var binInfo = numMetaToBinInfo(fieldInfo);
+        if (metaInfo.type==="int" || metaInfo.type==="float") {
+            var binInfo = numMetaToBinInfo(metaInfo);
             legend.rows = makeLegendRowsNumeric(binInfo);
             legend.rowType = "range";
-            legendSetPalette(legend, "default", metaIndex);
+            legendSetPalette(legend, "default");
             return legend;
         }
 
-        if (fieldInfo.diffValCount > MAXCOLORCOUNT) {
-            warn("This field has "+fieldInfo.diffValCount+" different values. Coloring on a field that has more than "+MAXCOLORCOUNT+" different values is not supported.");
+        if (metaInfo.diffValCount > MAXCOLORCOUNT) {
+            warn("This field has "+metaInfo.diffValCount+" different values. Coloring on a field that has more than "+MAXCOLORCOUNT+" different values is not supported.");
             return null;
         }
 
-        var metaCounts = fieldInfo.valCounts;
+        var metaCounts = metaInfo.valCounts;
 
         // we are going to sort this list later, so we need to keep track of what the original
         // index in the list was, as every meta data value is stored by its index, not
-        // its label. We store the index as [2] of the metaCounts array.
-        if (metaCounts[0].length!==3)
-            for (var valIdx=0; valIdx < metaCounts.length; valIdx++)
-                metaCounts[valIdx].push(valIdx);
+        // its label. Simply append the index as [2] of the metaCounts array.
+        for (var valIdx=0; valIdx < metaCounts.length; valIdx++)
+            metaCounts[valIdx].push(valIdx);
 
-        var oldSortBy = cartGet("SORT", legend.fieldName);
+        var oldSortBy = getFromUrl("SORT", legend.metaInfo.name);
         if (sortBy===undefined && oldSortBy!==undefined)
             sortBy = oldSortBy;
 
-        var fieldName = fieldInfo.label;
+        var fieldName = metaInfo.label;
 
         // force field names that look like "cluster" to a rainbow palette
-        // even if they look like numbers
+        // even if they are numbers
         if (sortBy===undefined) {
             // should cluster fields be sorted by their name
-            if (fieldName.indexOf("luster") || fieldName.indexOf("ouvain"))
+            if (fieldName.indexOf("luster") || fieldName.indexOf("ouvain") || fieldName.indexOf("res."))
                 sortBy = "count";
-            else if (fieldInfo.type==="float" || fieldInfo.type==="int")
+            else if (metaInfo.type==="float" || metaInfo.type==="int")
                 sortBy = "name";
             else
                 sortBy = "count";
@@ -2461,78 +3468,73 @@ var cellbrowser = function() {
         var sortResult = sortPairsBy(metaCounts, sortBy);
         var countListSorted = sortResult.list;
 
-        var useGradient = (fieldInfo.type==="float" || fieldInfo.type==="int");
+        var useGradient = (metaInfo.type==="float" || metaInfo.type==="int");
         //var defaultColors = makeColorPalette(countListSorted.length, useGradient);
 
         var rows = [];
         //var defColIdx = 0;
+        var shortLabels = metaInfo.ui.shortLabels;
+        var longLabels = metaInfo.ui.longLabels;
         for (var legRowIdx = 0; legRowIdx < countListSorted.length; legRowIdx++) {
             var legRowInfo = countListSorted[legRowIdx];
-            var label = legRowInfo[0];
+            //var label = legRowInfo[0];
+            let valIdx = legRowInfo[2]; // index of the original field in fieldInfo
+            //let valIdx = legRowInfo.intKey;
+            var label = shortLabels[valIdx];
+            var desc  = null;
+            if (longLabels)
+                desc  = longLabels[valIdx];
             var count = legRowInfo[1];
-            var valIdx = legRowInfo[2];
             var uniqueKey = label;
 
-            //var defColor = defaultColors[legRowIdx];
             if (likeEmptyString(label))
                 color = cNullColor;
-            //else {
-                //defColor = defaultColors[defColIdx];
-                //defColIdx++;
-            //    }
             // override any color with the color specified in the current URL
             var savKey = COL_PREFIX+label;
-            var color = cartGet(savKey, null);
+            var color = getFromUrl(savKey, null);
 
-            rows.push( [ color, null, label, count, valIdx, uniqueKey] );
+            // [ colorHexStr, defaultColorHexStr, label, count, internalKey, uniqueKey ]
+            rows.push( { 
+                "color": color, 
+                "defColor": null, 
+                "label": label, 
+                "count": count, 
+                "intKey":valIdx, 
+                "strKey":uniqueKey,
+                "longLabel" : desc,
+            } );
         }
 
         legend.rows = rows;
         legend.isSortedByName = sortResult.isSortedByName;
         legend.rowType = "category";
-        legendSetPalette(legend, "default", metaIndex);
+        legendSetPalette(legend, "default");
         return legend;
     }
 
-    function findCellIdsForLegendIds (cellIdToLegendId, legendIds, cellIds) {
-    /* given a legendId, return an object with cellIds that are associated to a given class */
-        if (cellIds==undefined)
-            cellIds = {};
-        for (var i = 0; i < legendIds.length; i++) {
-            var legendId = legendIds[i];
-            for (var cellId in cellIdToLegendId) {
-                if (gClasses[cellId] == legendId)
-                    cellIds[cellId] = true;
-                }
-        }
-        return cellIds;
-    }
-
-    function buildLegendForMetaIdx(fieldId) {
-    /* build the legend for a meta field */
-        var legend = makeLegendMeta(fieldId);
-        if (legend==null)
+    function buildLegendForMeta(metaInfo) {
+    /* build the gLegend for a meta field */
+        var legend = makeLegendMeta(metaInfo);
+        if (legend===null)
             return;
 
         $('.tpMetaBox').removeClass('tpMetaSelect');
         $('.tpMetaValue').removeClass('tpMetaValueSelect');
-        $('#tpMetaBox_'+fieldId).addClass('tpMetaSelect');
-        $('#tpMeta_'+fieldId).addClass('tpMetaValueSelect');
+        $('#tpMetaBox_'+metaInfo.name).addClass('tpMetaSelect');
+        $('#tpMeta_'+metaInfo.name).addClass('tpMetaValueSelect');
         $('.tpGeneBarCell').removeClass('tpGeneBarCellSelected');
+        $('#tpLegendTitle').text(legend.metaInfo.label.replace(/_/g, " "));
 
-        gLegend = legend;
-        buildLegendBar();
-        $('#tpLegendTitle').text(legend.fieldName.replace(/_/g, " "));
+        return legend;
     }
 
     function onMetaClick (event) {
     /* called when user clicks a meta data field or label */
-        var fieldId = parseInt(event.target.id.split("_")[1]);
-        if (isNaN(fieldId)) {
+        var fieldName = event.target.id.split("_")[1];
+        if (isNaN(fieldName)) {
             // try up one level in the DOM tree
-            fieldId = parseInt(event.target.parentElement.id.split("_")[1]);
+            fieldName = event.target.parentElement.id.split("_")[1];
         }
-        var fieldName = db.getMetaFields()[fieldId].name;
         colorByMetaField(fieldName);
     }
 
@@ -2547,10 +3549,60 @@ var cellbrowser = function() {
         htmls.push("</div>");
     }
 
+    function binInfoToValCounts(binInfo) {
+        /* given an array of (start, end, count), return an array of (label, count) */
+        var valCounts = [];
+
+        for (var binIdx = 0; binIdx < binInfo.length; binIdx++) {
+            var binMin = binInfo[binIdx][0];
+            var binMax = binInfo[binIdx][1];
+            var count  = binInfo[binIdx][2];
+            var label = labelForBinMinMax(binMin, binMax);
+            valCounts.push( [label, count] );
+        }
+        return valCounts;
+    }
+
+    function buildMetaTip(metaInfo, valHist, htmls) {
+        /* build the content of the tooltip that summarizes the multi selection */
+        var valCounts = metaInfo.valCounts;
+        var shortLabels = metaInfo.ui.shortLabels;
+        if (valCounts===undefined)  // for client-side discretized fields, we have to discretize first
+            valCounts = binInfoToValCounts(metaInfo.binInfo);   
+
+        var otherCount = 0;
+        var totalSum = 0;
+        for (var i = 0; i < valHist.length; i++) {
+            var valInfo  = valHist[i];
+            var valCount = valInfo[0];
+            var valFrac  = valInfo[1];
+            var valIdx   = valInfo[2];
+            //var valStr   = valCounts[valIdx][0]; // 0 = label, 1 = count
+            var label   = shortLabels[valIdx];
+
+            totalSum += valCount;
+            // only show the top values, summarize everything else into "other"
+            if (i > HISTOCOUNT) {
+                otherCount += valCount;
+                continue;
+            }
+
+            if (label==="")
+                label = "<span style='color:indigo'>(empty)</span>";
+            addMetaTipBar(htmls, valFrac, label);
+        }
+
+        if (otherCount!==0) {
+            var otherFrac = (otherCount / totalSum);
+            addMetaTipBar(htmls, otherFrac, "<span style='color:indigo'>(other)</span>");
+        }
+        return htmls;
+    }
+
     function onMetaMouseOver (event) {
-    /* called when user hovers over meta element: shows the histogram of selected values */
+    /* called when user hovers over meta element: shows the histogram of selected cells */
         var metaHist = db.metaHist;
-        if (metaHist===undefined)
+        if (metaHist===undefined || metaHist===null)
             return;
 
         // mouseover over spans or divs will not find the id, so look at their parent, which is the main DIV
@@ -2561,59 +3613,56 @@ var cellbrowser = function() {
             target = event.target.parentNode;
         var targetId = target.id;
 
-        var fieldIdx = parseInt(targetId.split("_")[1]);
+        var fieldName = targetId.split("_")[1];
 
-        var valCounts = db.getMetaFields()[fieldIdx].valCounts;
+        var metaInfo = db.findMetaInfo(fieldName);
 
-        var valHist = metaHist[fieldIdx];
         var htmls = [];
-        var otherCount = 0;
-        var totalSum = 0;
-        for (var i = 0; i < valHist.length; i++) {
-            var valInfo  = valHist[i];
-            var valCount = valInfo[0];
-            var valFrac  = valInfo[1];
-            var valIdx   = valInfo[2];
-            var valStr   = valCounts[valIdx][0]; // 0 = label, 1 = count
 
-            totalSum += valCount;
-            // only show the top values, summarize everything else into "other"
-            if (i > HISTOCOUNT) {
-                otherCount += valCount;
-                continue;
-            }
-
-            if (valStr==="")
-                valStr = "<span style='color:indigo'>(empty)</span>";
-            addMetaTipBar(htmls, valFrac, valStr);
-        }
-
-        if (otherCount!==0) {
-            var otherFrac = (otherCount / totalSum);
-            addMetaTipBar(htmls, otherFrac, "<span style='color:indigo'>(other)</span>");
-        }
+        if (metaInfo.type==="uniqueString")
+            htmls.push("<div>Cannot summarize: this is a field with unique values</div>");
+        else
+            htmls = buildMetaTip(metaInfo, metaHist[fieldName], htmls);
 
         $('#tpMetaTip').html(htmls.join(""));
-        $('#tpMetaTip').css({top: event.target.offsetTop+"px", left: metaBarWidth+"px", width:metaTipWidth+"px"});
+
+        // make sure that tooltip doesn't go outside of screen
+        //var tipTop = event.target.offsetTop;
+        var tipTop = event.target.getBoundingClientRect().top-8;
+        var tipHeight = $('#tpMetaTip').height();
+        var screenHeight = $(window).height();
+        if (tipTop+tipHeight > screenHeight)
+            tipTop = screenHeight - tipHeight - 8;
+
+        $('#tpMetaTip').css({top: tipTop+"px", left: metaBarWidth+"px", width:metaTipWidth+"px"});
         $('#tpMetaTip').show();
     }
 
     function buildComboBox(htmls, id, entries, selIdx, placeholder, width) {
     /* make html for a combo box and add lines to htmls list */
-        htmls.push('<select style="'+width+'px" id="'+id+'" data-placeholder="'+placeholder+'" class="tpCombo">');
+        htmls.push('<select style=width:"'+width+'px" id="'+id+'" data-placeholder="'+placeholder+'" class="tpCombo">');
         for (var i = 0; i < entries.length; i++) {
             var isSelStr = "";
             var entry = entries[i];
             if ((selIdx!==undefined && i===selIdx))
-                isSelStr = " selected"
+                isSelStr = " selected";
             htmls.push('<option value="'+entry[0]+'"'+isSelStr+'>'+entry[1]+'</option>');
         }
         htmls.push('</select>');
     }
 
     function loadCoordSet(coordIdx) {
+        var newRadius = db.conf.coords[coordIdx].radius;
+        var colorOnMetaField = db.conf.coords[coordIdx].colorOnMeta;
+        
         db.loadCoords(coordIdx,
-                function(a,b,c) { gotCoords(a,b,c); renderer.drawDots();},
+                function(coords, info, clusterMids) { 
+                    gotCoords(coords,info,clusterMids, newRadius); 
+                    if (colorOnMetaField!==undefined)
+                        colorByMetaField(colorOnMetaField);
+                    else
+                        renderer.drawDots();
+                },
                 onProgress);
     }
 
@@ -2622,6 +3671,7 @@ var cellbrowser = function() {
         var coordIdx = parseInt(params.selected);
         loadCoordSet(coordIdx);
         changeUrl({"layout":coordIdx, "zoom":null});
+        renderer.coordIdx = coordIdx;
         // remove the focus from the combo box
         removeFocus();
     }
@@ -2631,8 +3681,9 @@ var cellbrowser = function() {
         var geneSym = ev.target.value;
         if (geneSym==="")
             return; // do nothing if user just deleted the current gene
+        //$('#tpGeneCombo')[0].selectize.close();
         loadGeneAndColor(geneSym);
-        $(this).blur(); // remove focus
+        //$(this).blur(); // remove focus
     }
 
     function onMetaComboChange(ev, choice) {
@@ -2646,34 +3697,71 @@ var cellbrowser = function() {
         colorByMetaField(fieldName);
     }
 
-    function loadDataset(datasetName, resetVars) {
+    function showCollectionDialog(collName) {
+        /* load collection with given name and open dialog box for it */
+        loadCollectionInfo(collName, function(collData) { openDatasetDialog(collData.datasets, collData, true)});
+    }
+
+    function onConfigLoaded(datasetName) { 
+            // this is a collection if it does not have any field information
+            if (!db.conf.metaFields) {
+                showCollectionDialog(datasetName);
+                return;
+            }
+
+            let binData = localStorage.getItem(db.name+"|custom");
+            if (binData) {
+                let jsonStr = LZString.decompress(binData);
+                let customMeta = JSON.parse(jsonStr);
+                db.conf.metaFields.unshift(customMeta);
+            }
+
+            cartLoad(db);
+            renderData();
+            cartSave(db); // = refresh the URL from local storage
+
+            // start the tutorial after a while
+            var introShownBefore = localStorage.getItem("introShown");
+            if (introShownBefore===undefined)
+               setTimeout(function(){ showIntro(true); }, 3000); // shown after 5 secs
+    }
+
+    function loadDataset(datasetName, resetVars, md5) {
         /* load a dataset and optionally reset all the URL variables.
          * When a dataset is opened through the UI, the variables have to
          * be reset, as their values (gene or meta data) may not exist
          * there. If it's opened via a URL, the variables must stay. */
+
+        // collections are not real datasets, so ask user which one they want
+
         db = new CbDbFile(datasetName);
 
-        var vars = undefined;
+
+        var vars;
         if (resetVars)
             vars = {};
 
         changeUrl({"ds":datasetName}, vars);
-        db.loadConfig(function() { renderData() });
+        db.loadConfig(onConfigLoaded, md5);
+    }
 
-        // start the tutorial after a while
-        var introShownBefore = localStorage.getItem("introShown");
-        if (introShownBefore==undefined)
-           setTimeout(function(){ showIntro(true); }, 5000); // show after 5 secs
-
+    function loadCollectionInfo(collName, onDone) {
+        /* load collection info and run onDone */
+        var jsonUrl = cbUtil.joinPaths([collName, "dataset.json"]);
+        cbUtil.loadJson(jsonUrl, onDone);
     }
 
     function onDatasetChange(ev, params) {
-        /* user changed the dataset in the dropbox */
-        var datasetIdx = parseInt(params.selected);
-        var datasetName = gDatasetList[datasetIdx].name;
+        /* user changed the dataset in the collection dropdown box */
+        /* jshint validthis: true */
         $(this).blur();
         removeFocus();
-        loadDataset(datasetName, true);
+
+        //var datasetIdx = parseInt(params.selected);
+        //var datasetInfo = gDatasetList[datasetIdx];
+        var datasetName = params.selected;
+        var md5 = cbUtil.findIdxWhereEq(db.conf.datasets, "name", datasetName).md5;
+        loadDataset(datasetName, true, md5);
     }
 
     function buildLayoutCombo(htmls, files, id, width, left, top) {
@@ -2684,24 +3772,26 @@ var cellbrowser = function() {
             var coordFiles = files[i];
             var label = coordFiles.shortLabel;
             if (label===undefined)
-                warn("Layout coordinate file "+i+" has no .shortLabel attribute")
+                warn("Layout coordinate file "+i+" has no .shortLabel attribute");
             entries.push([i, label]);
         }
         buildComboBox(htmls, id, entries, 0, "Select a layout algorithm...", width);
         htmls.push('</div>');
     }
 
-    function buildDatasetCombo(htmls, datasets, id, width, left, top) {
-        /* datasets with a list of elements with a shortLabel attribute. Build combobox for them. */
-        htmls.push('<div class="tpToolBarItem" style="position:absolute;width:150px;left:'+left+'px;top:'+top+'px"><label for="'+id+'">Dataset</label>');
+    function buildCollectionCombo(htmls, dataset, id, width, left, top) {
+        /* build combobox with shortLabels of all datasets that are part of same collection */
+        htmls.push('<div class="tpToolBarItem" style="position:absolute;width:'+width+'px;left:'+left+'px;top:'+top+'px"><label for="'+id+'">Collection</label>');
+
+        var collName = dataset.collections[0];
         var entries = [];
-        for (var i = 0; i < datasets.length; i++) {
-            var dataset = datasets[i];
-            var label = dataset.shortLabel;
-            if (label===undefined)
-                label = "Dataset "+i;
-            entries.push([i, label]);
+        var linkedDatasets = db.conf.datasets;
+        for (var i = 0; i < linkedDatasets.length; i++) {
+            var dsInfo = linkedDatasets[i];
+            if (dsInfo.collections!==undefined && dsInfo.collections.find(collName)!==undefined)
+                entries.push( [i, dsInfo.shortLabel] );
         }
+
         buildComboBox(htmls, id, entries, 0, "Select a dataset...", width);
         htmls.push('</div>');
     }
@@ -2710,16 +3800,16 @@ var cellbrowser = function() {
         var metaFieldInfo = db.getMetaFields();
         htmls.push('<div id="'+idOuter+'" style="padding-left:2px; display:inline">');
         var entries = [["_none", ""]];
-        for (var i = 0; i < metaFieldInfo.length; i++) {
+        for (var i = 1; i < metaFieldInfo.length; i++) { // starts at 1, skip ID field
             var field = metaFieldInfo[i];
             var fieldName = field.label;
-            var hasTooManyVals = (field.diffValCount>100);
-            if (hasTooManyVals)
-                continue;
+            //var hasTooManyVals = (field.diffValCount>100);
+            //if (hasTooManyVals)
+                //continue;
             entries.push( ["tpMetaVal_"+i, fieldName] );
         }
 
-        buildComboBox(htmls, id, entries, 0, "select a field...", metaBarWidth);
+        buildComboBox(htmls, id, entries, 0, "select a field...", metaBarWidth+50);
         htmls.push('</div>');
     }
 
@@ -2740,6 +3830,23 @@ var cellbrowser = function() {
             inherit_select_classes : true,
             disable_search_threshold: 10,
             width : widthPx
+        });
+    }
+
+    function updateCollectionCombo(id, currDsName, collName) {
+        /* load sibling labels into collection combobox from json */
+        loadCollectionInfo(collName, function(collData) {
+            var htmls = [];
+            var datasets = collData.datasets;
+            for (var i = 0; i < datasets.length; i++) {
+                var ds = datasets[i];
+                var selStr = "";
+                if (ds.name===currDsName)
+                    selStr = "selected";
+                htmls.push('<option value="'+ds["name"]+'"'+selStr+'>'+ds.shortLabel+'</option>');
+            }
+            $('#'+id).html(htmls.join(""));
+            $("#"+id).trigger("chosen:updated");
         });
     }
 
@@ -2768,17 +3875,78 @@ var cellbrowser = function() {
     }
 
 
+    function makeXenaUrl(metaFieldName, geneSyms, geneSym, actMeta) {
+        /* return URL to Xena view with this dataset and geneSyms loaded */
+        var xenaId = db.conf.xenaId; 
+        var phenoId = db.conf.xenaPhenoId;
+        var browser = 'https://singlecell.xenabrowser.net/';
+        var view = [{
+                name: phenoId,
+                host: 'https://singlecellnew.xenahubs.net',
+                fields: metaFieldName,
+                columnLabel : 'Cell Annotations',
+                fieldLabel: metaFieldName
+            }];
+
+        if (geneSyms.length!==0)
+            view.push({
+                name: xenaId,
+                host: 'https://singlecellnew.xenahubs.net',
+                fields: geneSyms.join(" "),
+                width : 15*geneSyms.length, 
+                columnLabel : 'Dataset genes',
+                fieldLabel: geneSyms.join(" ")
+            });
+
+        if (actMeta)
+            view.push({
+                name: phenoId,
+                host: 'https://singlecellnew.xenahubs.net',
+                fields: actMeta,
+                width : 120, 
+                columnLabel : 'Current Meta',
+                fieldLabel: actMeta
+            });
+
+        if (geneSym)
+            view.push({
+                name: xenaId,
+                host: 'https://singlecellnew.xenahubs.net',
+                fields: geneSym,
+                width : 120, 
+                columnLabel : 'Current Gene',
+                fieldLabel: geneSym
+            });
+
+        var heatmap = { "showWelcome" : false };
+
+        var url = browser + 'heatmap/?columns=' + 
+            encodeURIComponent(JSON.stringify(view)) + 
+            '&heatmap=' + encodeURIComponent(JSON.stringify(heatmap));
+        return url;
+    }
+
     function makeHubUrl(geneSym) {
         /* return URL of the hub.txt file, possibly jumping to a given gene  */
             var hubUrl = db.conf.hubUrl;
-            if (hubUrl==undefined)
+
+            // we accept session links in the hubUrl statement and just pass these through
+            if (hubUrl && hubUrl.indexOf("genome.ucsc.edu/s/")!==-1)
+                return hubUrl;
+
+            if (hubUrl===undefined)
                 return null;
             var ucscDb = db.conf.ucscDb;
             if (ucscDb===undefined) {
                 alert("Internal error: ucscDb is not defined in cellbrowser.conf. Example values: hg19, hg38, mm10, etc. You have to set this variable to make track hubs work.");
                 return "";
             }
-            var fullUrl = "https://genome.ucsc.edu/cgi-bin/hgTracks?hubUrl="+hubUrl+"&genome="+ucscDb;
+            // we also accept just track names
+            var fullUrl = null;
+            if (hubUrl && hubUrl.indexOf("http")===-1)
+                fullUrl = "https://genome.ucsc.edu/cgi-bin/hgTracks?"+hubUrl+"=full&genome="+ucscDb;
+            else
+                fullUrl = "https://genome.ucsc.edu/cgi-bin/hgTracks?hubUrl="+hubUrl+"&genome="+ucscDb;
 
             if (geneSym!==undefined)
                 fullUrl += "&position="+geneSym+"&singleSearch=knownCanonical";
@@ -2786,87 +3954,117 @@ var cellbrowser = function() {
             return fullUrl;
     }
 
-    function buildToolBar (coordInfo, datasetName, fromLeft, fromTop) {
+    function onGenomeButtonClick(ev) {
+        /* run when the user clicks the 'genome browser' button */
+        let actSym = null;
+        if (gLegend.type==="expr")
+            actSym = gLegend.geneSym;
+        var fullUrl = makeHubUrl(actSym);
+        db.gbWin = window.open(fullUrl, 'gbTab');
+        return false;
+    }
+
+    function onXenaButtonClick(ev) {
+        /* run when the user clicks the xena button */
+        var geneInfos = db.conf.quickGenes;
+        var syms  = []
+        if (geneInfos!=undefined) {
+            for (var i = 0; i < geneInfos.length; i++)
+                syms.push( geneInfos[i][0] ); // make array of symbols
+        }
+
+        var actSym = null;
+        var actMeta = null;
+        if (gLegend.type==="expr")
+            actSym = gLegend.geneSym;
+        else
+            actMeta = gLegend.metaInfo.label;
+
+        if (syms.length===0 && actSym===null) {
+            alert("Sorry, the view is not colored by a gene and there are no 'Dataset genes' "+
+                   " defined, so there are no genes active "+
+                "that could be shown on the heatmap. Please color by a gene first, "+
+                "then click the button again.");
+            return;
+        }
+            
+        var fullUrl = makeXenaUrl(db.conf.labelField, syms, actSym, actMeta);
+        //if (!db.xenaWin)
+        db.xenaWin = window.open(fullUrl, 'xenaTab');
+        //else
+            //db.xenaWin.location.href = fullUrl;
+        return false;
+    }
+
+    function buildToolBar (coordInfo, dataset, fromLeft, fromTop) {
     /* add the tool bar with icons of tools and add under body to the DOM */
         $("#tpToolBar").remove();
 
         var htmls = [];
+
         htmls.push("<div id='tpToolBar' style='position:absolute;left:"+fromLeft+"px;top:"+fromTop+"px'>");
-        //htmls.push('<div id="tpIcons" style="display:inline-block">');
-        //htmls.push('<div class="btn-group" role="group" style="vertical-align:top">');
-        //htmls.push('<button data-placement="bottom" data-toggle="tooltip" title="Zoom-to-rectangle mode.<br>Keyboard: Windows/Command or z" id="tpIconModeZoom" class="ui-button tpIconButton" style="margin-right:0"><img src="img/zoom.png"></button>');
-        //htmls.push('<button data-placement="bottom" title="Move mode. Keyboard: Alt or m" id="tpIconModeMove" data-toggle="tooltip" class="ui-button tpIconButton" style="margin-right:0"><img src="img/move.png"></button>');
-        //htmls.push('<button data-placement="bottom" title="Select mode.<br>Keyboard: shift or s" id="tpIconModeSelect" class="ui-button tpIconButton" style="margin-right:0"><img src="img/select.png"></button>');
-        //htmls.push('</div>');
-
-        //htmls.push('&emsp;');
-        //htmls.push('<button title="Zoom in" id="tpIconZoomIn" type="button" class="btn-small btn-outline-primary noPad"><i class="material-icons">zoom_in</i></button>');
-        //htmls.push('<button title="Zoom out" id="tpIconZoomOut" type="button" class="btn-small btn-outline-primary noPad"><i class="material-icons">zoom_out</i></button>');
-        //htmls.push('<button title="Zoom to 100%, showing all data, keyboard: space" data-placement="bottom" data-toggle="tooltip" id="tpZoom100Button" class="ui-button tpIconButton" style="margin-right:0"><img src="img/center.png"></button>');
-
-        //htmls.push("&emsp;");
-
-        //htmls.push('<div class="btn-group" role="group" style="vertical-align:top">');
-        //htmls.push('<button title="More info about this dataset" id="tpIconDatasetInfo" type="button" class="ui-button tpIconButton"><img title="More info about this dataset" src="img/info.png"></button>');
         htmls.push('<button title="More info about this dataset: abstract, methods, download, etc." id="tpButtonInfo" type="button" class="ui-button tpIconButton" data-placement="bottom">Info</button>');
-        //htmls.push('</div>');
-        //htmls.push('<img class="tpIconButton" id="tpIconDatasetInfo" data-placement="bottom" data-toggle="tooltip" title="More info about this dataset" src="img/info.png" style="height:18px;position:absolute;top:4px; left:'+(toolBarComboLeft+datasetComboWidth+60)+'px">');
-
-        //htmls.push("&emsp;");
-        var layoutLeft = 185;
-        if (db.conf.hubUrl!==undefined)
-            layoutLeft = 290;
-        buildLayoutCombo(htmls, coordInfo, "tpLayoutCombo", 300, layoutLeft, 2);
-        //buildDatasetCombo(htmls, gDatasetList, "tpDatasetCombo", 100, 220, 0);
-
         htmls.push('<button id="tpOpenDatasetButton" class="gradientBackground ui-button ui-widget ui-corner-all" style="margin-top:3px; height: 24px; border-radius:3px; padding-top:3px" title="Open another dataset" data-placement="bottom">Open...</button>');
 
-        var hubUrl = db.conf.hubUrl;
-        if (hubUrl!==undefined) {
-            var fullUrl = makeHubUrl();
-            htmls.push('<a target=_blank href="'+fullUrl+'" id="tpOpenUcsc" class="gradientBackground ui-button ui-widget ui-corner-all" style="margin-left: 10px; margin-top:3px; height: 24px; border-radius:3px; padding-top:3px" title="Show sequencing read coverage and gene expression on UCSC Genome Browser" data-placement="bottom">Genome Browser</a>');
+        var nextLeft = 140;
+        if (db.conf.hubUrl!==undefined) {
+            htmls.push('<a target=_blank href="#" id="tpOpenGenome" class="gradientBackground ui-button ui-widget ui-corner-all" style="margin-left: 10px; margin-top:3px; height: 24px; border-radius:3px; padding-top:3px" title="Show sequencing read coverage and gene expression on UCSC Genome Browser" data-placement="bottom">Genome Browser</a>');
+            nextLeft += 155;
+        }
+
+        var xenaId = db.conf.xenaId;
+        if (xenaId!==undefined) {
+            htmls.push('<a target=_blank href="#" id="tpOpenXena" class="gradientBackground ui-button ui-widget ui-corner-all" style="margin-left: 10px; margin-top:3px; height: 24px; border-radius:3px; padding-top:3px" title="Show gene expression heatmap on UCSC Xena Browser, creates heatmap of current gene (if coloring by gene) and all dataset genes. Click this button also if you have an active Xena window open and want to update the view there." data-placement="bottom">Xena</a>');
+            nextLeft += 80;
+        }
+
+        buildLayoutCombo(htmls, coordInfo, "tpLayoutCombo", 300, nextLeft, 2);
+        nextLeft += 215;
+
+        if (dataset.collections) {
+            buildCollectionCombo(htmls, dataset, "tpCollectionCombo", 330, nextLeft, 0);
         }
 
         htmls.push("</div>");
 
         $(document.body).append(htmls.join(""));
 
-        //var el = document.getElementById('tpOpenUcsc');
-        //el.addEventListener("click"
+        $('#tpOpenXena').click(onXenaButtonClick);
+        $('#tpOpenGenome').click(onGenomeButtonClick);
 
         activateTooltip('.tpIconButton');
         activateTooltip('#tpOpenUcsc');
         activateTooltip('#tpOpenDatasetButton');
 
-        //$('#tpIconModeMove').click( function() { activateMode("move")} );
-        //$('#tpIconModeZoom').click( function() { activateMode("zoom")} );
-        //$('#tpIconModeSelect').click( function() { activateMode("select")} );
-        //$('#tpZoom100Button').click( onZoom100Click );
-        //$('#tpIconDatasetInfo').click( function() { openDatasetDialog()});
-        $('#tpButtonInfo').click( openDatasetDialog );
+        $('#tpButtonInfo').click( function() {openDatasetDialog(null, db.conf)} );
 
-        //$('#tpIconZoomIn').click( onZoomInClick );
-        //$('#tpIconZoomOut').click( onZoomOutClick );
-        //$('#tpIconZoom100').click( onZoom100Click );
-
-        activateCombobox("tpDatasetCombo", datasetComboWidth);
         activateCombobox("tpLayoutCombo", layoutComboWidth);
 
-        //$('#tpGeneCombo').select2({ placeholder : "Gene Symbol"}); // preliminary setup, real setup will be in updateToolbar()
-        $('#tpGeneCombo').selectize({
-                labelField : 'text',
+        if (dataset.collections) {
+            activateCombobox("tpCollectionCombo", collectionComboWidth);
+            updateCollectionCombo("tpCollectionCombo", dataset.name, dataset.collections[0]);
+        }
+
+        var select = $('#tpGeneCombo').selectize({
+                maxItems: 1,
                 valueField : 'id',
+                labelField : 'text',
                 searchField : 'text',
+                closeAfterSelect: true,
                 load : geneComboSearch
         });
+        select.on("change", onGeneChange);
+        //$('#tpGeneCombo').change(onGeneChange);
 
-        $('#tpDatasetCombo').change(onDatasetChange);
+        $('#tpCollectionCombo').change(onDatasetChange);
         // update the combobox, select the right dataset
-        var datasetIdx = cbUtil.findIdxWhereEq(gDatasetList, "name", datasetName);
-        $("#tpDatasetCombo").val(datasetIdx).trigger("chosen:updated");
+        //var datasetIdx = cbUtil.findIdxWhereEq(gDatasetList, "name", dataset.name);
+        //$("#tpDatasetCombo").val(datasetIdx).trigger("chosen:updated");
         $('#tpLayoutCombo').change(onLayoutChange);
-        $('#tpGeneCombo').change(onGeneChange);
-        $('#tpOpenDatasetButton').click(openDatasetDialog);
+        $('#tpOpenDatasetButton').click(function() { 
+            $(this).blur();  // remove focus = tooltip disappears
+            openDatasetDialog(gDatasetList, db.conf); 
+        });
     }
 
     function metaFieldToLabel(fieldName) {
@@ -2879,37 +4077,82 @@ var cellbrowser = function() {
     }
 
     function buildMetaPanel(htmls) {
-        var metaFieldInfo = db.conf.metaFields;
-        htmls.push("<div id='tpMetaPanel'>");
-        for (var i = 0; i < metaFieldInfo.length; i++) {
-            var field = metaFieldInfo[i];
-            var fieldLabel = field.label;
+        /* add html strings for the meta panel to the left side bar */
+        var metaFields = db.conf.metaFields;
+        for (var i = 0; i < metaFields.length; i++) {
+            var metaInfo = metaFields[i];
+            var fieldLabel = metaInfo.label;
             fieldLabel = fieldLabel.replace(/_/g, " ");
 
             // fields without binning and with too many unique values are greyed out
-            var isGrey = (field.diffValCount>100 && field.binMethod===undefined);
+            var isGrey = (metaInfo.diffValCount>100 && metaInfo.binMethod===undefined);
 
             var addClass = "";
             var addTitle="";
-            htmls.push("<div class='tpMetaBox' id='tpMetaBox_"+i+"'>");
+            htmls.push("<div class='tpMetaBox' id='tpMetaBox_"+metaInfo.name+"'>");
             if (isGrey) {
                 addClass=" tpMetaLabelGrey";
                 addTitle=" title='This field contains too many different values. You cannot click it to color on it.'";
             }
-            htmls.push("<div id='tpMetaLabel_"+i+"' class='tpMetaLabel"+addClass+"'"+addTitle+">"+fieldLabel+"</div>");
+
+            let divId;
+            //if (field.isCustom===true)
+              //  divId = "tpMetaLabel_custom"+i;
+            //else
+                divId = "tpMetaLabel_"+metaInfo.name;
+
+            htmls.push("<div id='"+divId+"' class='tpMetaLabel"+addClass+"'"+addTitle+">"+fieldLabel+"</div>");
 
             var styleAdd="";
-            if (field.opt!==undefined) {
-                var opt = field.opt;
+            if (metaInfo.opt!==undefined) {
+                var opt = metaInfo.opt;
                 if (opt.fontSize!==undefined)
-                    styleAdd = ";font-size:"+field.opt.fontSize;
+                    styleAdd = ";font-size:"+metaInfo.opt.fontSize;
             }
 
-            htmls.push("<div class='tpMetaValue' style='width:"+(metaBarWidth-2*metaBarMargin)+"px"+styleAdd+"' id='tpMeta_"+i+"'>&nbsp;</div>");
+            htmls.push("<div class='tpMetaValue' style='width:"+(metaBarWidth-2*metaBarMargin)+"px"+styleAdd+
+                "' id='tpMeta_"+metaInfo.name+"'>&nbsp;</div>");
             htmls.push("</div>"); // tpMetaBox
         }
         htmls.push("<div style='background-color:white; float:right' id='tpMetaNote' style='display:none; height:1em'></div>");
-        htmls.push("</div>"); // tpMetaPanel
+    }
+
+    function rebuildMetaPanel() {
+        $("#tpMetaPanel").empty();
+        let htmls = [];
+        buildMetaPanel(htmls);
+        $("#tpMetaPanel").html(htmls.join(""));
+        connectMetaPanel();
+    }
+
+    function connectMetaPanel() {
+        $(".tpMetaLabel").click( onMetaClick );
+        $(".tpMetaValue").click( onMetaClick );
+        $(".tpMetaValue").mouseover( onMetaMouseOver );
+        $(".tpMetaValue").mouseleave ( function() { $('#tpMetaTip').hide()} );
+
+        // setup the right-click menu
+        //var menuItems = [{name: "Use as cluster label"},{name: "Copy field value to clipboard"}];
+        var menuItems = [{name: "Copy field value to clipboard"}];
+        var menuOpt = {
+            selector: ".tpMetaBox",
+            items: menuItems,
+            className: 'contextmenu-customwidth',
+            callback: onMetaRightClick
+        };
+        $.contextMenu( menuOpt );
+
+        var menuItemsCust = [{name: "Copy field value to clipboard"},
+            {name: "Remove custom annotations"}];
+        var menuOptCust = {
+            selector: "#tpMetaBox_custom",
+            items: menuItemsCust,
+            className: 'contextmenu-customwidth',
+            callback: onMetaRightClick
+        };
+        $.contextMenu( menuOptCust );
+        // setup the tooltips
+        //$('[title!=""]').tooltip();}
     }
 
     function buildLeftSidebar () {
@@ -2936,8 +4179,11 @@ var cellbrowser = function() {
         htmls.push('<label style="padding-left: 2px; margin-bottom:8px; padding-top:8px" for="'+"tpMetaCombo"+'">Color by Annotation</label>');
         buildMetaFieldCombo(htmls, "tpMetaComboBox", "tpMetaCombo", 0);
         htmls.push('<div style="padding-top:4px; padding-bottom: 4px; padding-left:2px" id="tpHoverHint" class="tpHint">Hover over a '+gSampleDesc+' to update data below</div>');
-        htmls.push('<div style="padding-top:4px; padding-bottom: 4px; padding-left:2px; display: none" id="tpSelectHint" class="tpHint">Cells selected. No update on hovering.</div>');
+        htmls.push('<div style="padding-top:4px; padding-bottom: 4px; padding-left:2px; display: none" id="tpSelectHint" class="tpHint">Cells selected. No update on hover.</div>');
+        
+        htmls.push("<div id='tpMetaPanel'>");
         buildMetaPanel(htmls);
+        htmls.push("</div>"); // tpMetaPanel
 
         htmls.push("</div>"); // tpAnnotTab
 
@@ -2949,7 +4195,8 @@ var cellbrowser = function() {
 
         //var myGenes = loadMyGenes();
 
-        buildGeneTable(htmls, "tpGenes", "Dataset Genes", null, db.conf.quickGenes);
+        var noteStr = "No genes defined. Use the setting quickGenesFile in cellbrowser.conf to add a file with gene symbols that will be shown here";
+        buildGeneTable(htmls, "tpGenes", "Dataset Genes", null, db.conf.quickGenes, noteStr);
 
         htmls.push("</div>"); // tpGeneTab
 
@@ -2965,23 +4212,26 @@ var cellbrowser = function() {
 
         activateCombobox("tpMetaCombo", metaBarWidth-10);
         $("#tpMetaCombo").change( onMetaComboChange );
-        $(".tpMetaLabel").click( onMetaClick );
-        $(".tpMetaValue").click( onMetaClick );
-        $(".tpMetaValue").mouseover( onMetaMouseOver );
-        $(".tpMetaValue").mouseleave ( function() { $('#tpMetaTip').hide()} );
+        connectMetaPanel();
+    }
 
-        // setup the right-click menu
-        //var menuItems = [{name: "Use as cluster label"},{name: "Copy field value to clipboard"}];
-        var menuItems = [{name: "Copy field value to clipboard"}];
-        var menuOpt = {
-            selector: ".tpMetaBox",
-            items: menuItems,
-            className: 'contextmenu-customwidth',
-            callback: onMetaRightClick
-        };
-        $.contextMenu( menuOpt );
-        // setup the tooltips
-        //$('[title!=""]').tooltip();
+    function makeTooltipCont() {
+        /* make a div for the tooltips */
+        var ttDiv = document.createElement('div');
+        ttDiv.id = "tpTooltip";
+        ttDiv.style.position = "absolute";
+        //ttDiv.style.left = left+"px";
+        //ttDiv.style.top = top+"px";
+        ttDiv.style["padding"]="2px";
+        ttDiv.style["border"]="1px solid black";
+        ttDiv.style["border-radius"]="2px";
+        ttDiv.style["display"]="none";
+        ttDiv.style["cursor"]="pointer";
+        ttDiv.style["background-color"]="white";
+        ttDiv.style["box-shadow"]="0px 2px 4px rgba(0,0,0,0.3)";
+        ttDiv.style["user-select"]="none";
+        ttDiv.style["z-index"]="10";
+        return ttDiv;
     }
 
     function showIntro(addFirst) {
@@ -3059,7 +4309,7 @@ var cellbrowser = function() {
     function hslToRgb(h, s, l) {
       var r, g, b;
 
-      if (s == 0) {
+      if (s === 0) {
 	r = g = b = l; // achromatic
       } else {
 	var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
@@ -3098,16 +4348,23 @@ var cellbrowser = function() {
 
     function makeColorPalette(palName, n) {
     /* return an array with n color hex strings */
-    // Use Google's palette functions for now, first Paul Tol's colors, if that fails, use the usual HSV rainbow
+    /* Use Google's palette functions for now, first Paul Tol's colors, if that fails, use the usual HSV rainbow
+     * This code understands our special palette, tol-sq-blue
+    */
         var pal = [];
         if (palName==="blues")
             pal = makeHslPalette(0.6, n);
         else if (palName==="reds")
             pal = makeHslPalette(0.0, n);
         else {
-            pal = palette(palName, n);
-            if (palName==="tol-sq")
-                pal[0]='f4f7ff';
+            if (n===2)
+                pal = ["FF0000","0000FF"];
+            else {
+                var realPalName = palName.replace("tol-sq-blue", "tol-sq");
+                pal = palette(realPalName, n);
+                if (palName==="tol-sq-blue")
+                    pal[0]='f4f7ff';
+            }
         }
 
         return pal;
@@ -3162,7 +4419,7 @@ var cellbrowser = function() {
     function setupKeyboard() {
     /* bind the keyboard shortcut keys */
         phoneHome();
-        Mousetrap.bind('o', openDatasetDialog);
+        Mousetrap.bind('o', function() { openDatasetDialog(gDatasetList, db.conf)});
         Mousetrap.bind('c m', onMarkClearClick);
         Mousetrap.bind('h m', onMarkClick);
 
@@ -3174,16 +4431,21 @@ var cellbrowser = function() {
 
         Mousetrap.bind('-', onZoomOutClick);
         Mousetrap.bind('+', onZoomInClick);
-        Mousetrap.bind('n', onSelectNoneClick);
-        Mousetrap.bind('a', onSelectAllClick);
+        Mousetrap.bind('s n', onSelectNoneClick);
+        Mousetrap.bind('s a', onSelectAllClick);
+        Mousetrap.bind('s i', onSelectInvertClick);
+        Mousetrap.bind('s s', onSelectNameClick);
+
+
         Mousetrap.bind('m', function() {$('#tpMetaCombo').trigger("chosen:open"); return false;});
         Mousetrap.bind('d', function() {$('#tpDatasetCombo').trigger("chosen:open"); return false;});
         //Mousetrap.bind('l', function() {$('#tpLayoutCombo').trigger("chosen:open"); return false;});
         Mousetrap.bind('g', function() {$("#tpGeneCombo").selectize()[0].selectize.focus(); return false;});
         Mousetrap.bind('c l', onHideShowLabelsClick );
-        Mousetrap.bind('f c', onSelectComplexClick );
+        Mousetrap.bind('f c', onFindCellsClick );
         Mousetrap.bind('f i', function() { onSelectByIdClick(); return false; } );
         Mousetrap.bind('t', onSplitClick );
+        Mousetrap.bind('h', onHeatClick );
 
         Mousetrap.bind('up', function() { renderer.movePerc(0, 0.1); renderer.drawDots(); } );
         Mousetrap.bind('left', function() { renderer.movePerc(-0.1, 0); renderer.drawDots(); } );
@@ -3195,11 +4457,17 @@ var cellbrowser = function() {
         Mousetrap.bind('j', function() { renderer.movePerc(-0.1, 0); renderer.drawDots(); } );
         Mousetrap.bind('l', function() { renderer.movePerc(0.1, 0); renderer.drawDots(); } );
         Mousetrap.bind('k', function() { renderer.movePerc(0, -0.1); renderer.drawDots(); } );
+
+        //Mousetrap.stopCallback = function(e, element, combo) {
+            //var doStop = (element.tagName == 'INPUT' || element.tagName == 'SELECT' || element.tagName == 'TEXTAREA' || (element.contentEditable && element.contentEditable == 'true'));
+            //console.log(e, element, combo);
+            //return doStop;
+        //};
     }
 
     // https://stackoverflow.com/a/33861088/233871
     function isInt(x) {
-        return (typeof x==='number') && x % 1 == 0;
+        return (typeof x==='number') && x % 1 === 0;
     }
 
     function naturalSort (a, b) {
@@ -3242,7 +4510,7 @@ var cellbrowser = function() {
         if (oFxNcL > oFyNcL) { return 1; }
     }
     return 0;
-};
+}
 
     function sortPairsBy(countList, sortBy) {
     /* sort an array in the format [name, count] by either name (using naturalSort) or count */
@@ -3307,22 +4575,6 @@ var cellbrowser = function() {
         }
     }
 
-    function findDotsWithMeta(metaIdx, hlValue) {
-    /* return array of cellIds with a given meta value */
-        var metaData = gCurrentDataset.metaData;
-        ret = [];
-        for (var i = 0; i < pixelCoords.length; i++) {
-            var cellId = pixelCoords[i][0];
-            var x = pixelCoords[i][1];
-            var y = pixelCoords[i][2];
-            var metaRow = metaData[cellId];
-            var metaVal = metaRow[metaIdx];
-            if (metaVal === hlValue) {
-                ret.push(cellId);
-            }
-        }
-    }
-
     function removeCellIds(coords, cellIds) {
     /* remove all coords that are in an object of cellIds */
         var newCoords = [];
@@ -3347,27 +4599,98 @@ var cellbrowser = function() {
         return newCoords;
     }
 
-    function onLegendLabelClick(ev) {
-    /* called when user clicks on legend entry. */
-        var legendId = parseInt(ev.target.id.split("_")[1]);
-        if (("lastClicked" in gLegend) && gLegend.lastClicked==legendId) {
-            // user clicked the same entry as before: clear selection
-            gLegend.lastClicked = null;
-            renderer.selectClear();
-            $('#tpLegend_'+legendId).removeClass('tpLegendSelect');
-            menuBarHide("#tpFilterButton");
-            menuBarHide("#tpOnlySelectedButton");
-            updateGeneTableColors(null);
+    function makeLabelRenames(metaInfo) {
+        /* return an obj with old cluster name -> new cluster name */
+        var valCounts = metaInfo.valCounts;
+        var newLabels = metaInfo.ui.shortLabels;
+
+        var oldToNew = {};
+        for (var i = 0; i < valCounts.length; i++) {
+            var oldLabel = valCounts[i][0];
+            var newLabel = newLabels[i];
+            oldToNew[oldLabel] = newLabel;
+        }
+        return oldToNew;
+    }
+
+    function getClusterFieldInfo() {
+        var clusterField = db.conf.labelField;
+        var clusterMetaInfo = db.findMetaInfo(clusterField);
+        return clusterMetaInfo;
+    }
+
+    function rendererUpdateLabels(metaInfo) {
+        /* update the labels in the renderer from the metaInfo data. */
+        var oldToNew = makeLabelRenames(metaInfo);
+
+        var oldRendLabels = null;
+        if (renderer.origLabels) {
+            oldRendLabels = renderer.origLabels;
         }
         else {
+            oldRendLabels = renderer.getLabels();
+            renderer.origLabels = oldRendLabels;
+        }
+
+        var newRendLabels = [];
+        for (var i = 0; i < oldRendLabels.length; i++) {
+            var oldLabel = oldRendLabels[i];
+            var newLabel = oldToNew[oldLabel];
+            newRendLabels.push(newLabel);
+        }
+        renderer.setLabels(newRendLabels);
+    }
+
+    function onLegendLabelClick(ev) {
+    /* called when user clicks on legend entry. */
+
+        function saveLabel() {
+            /* save the current labelEl text to the cart and update everything */
+            $(".tooltip").remove(); // not sure why tooltips won't disappear here
+            labelEl.removeAttr("contenteditable");
+            var newLabel = labelEl.text(); // = strip the rich text tags possibly added through copy/paste
+            var metaInfo = gLegend.metaInfo;
+            cartFieldArrayUpdate(db, metaInfo, "shortLabels", legendId, newLabel);
+            legendUpdateLabels(gLegend.metaInfo.name);
+            rendererUpdateLabels(metaInfo);
+            buildLegendBar();
+            renderer.drawDots();
+        }
+
+        var legendId = parseInt(ev.target.id.split("_")[1]);
+        if (("lastClicked" in gLegend) && gLegend.lastClicked===legendId) {
+            // user clicked the same entry as before: 
+            gLegend.lastClicked = null;
+            //if (gLegend.type!=="meta") {
+                // clear the selection
+                $('#tpLegend_'+legendId).removeClass('tpLegendSelect');
+                renderer.selectClear();
+                //menuBarHide("#tpFilterButton");
+                //menuBarHide("#tpOnlySelectedButton");
+            //} else {
+                //var labelSel = '#tpLegendLabel_'+legendId;
+                //var labelEl = $(labelSel);
+                //labelEl.attr("contenteditable", "true");
+                //labelEl.focus();
+                //document.execCommand('selectAll', false, null);
+                //labelEl.keydown(function(e) {
+                    //if (e.keyCode !== 13)
+                        //return;
+                    //saveLabel();
+                //});
+                //labelEl.focusout( function() { saveLabel(); });
+            //}
+        }
+        else {
+            // clear the old selection
             if (!ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
                 renderer.selectClear();
                 $('.tpLegend').removeClass('tpLegendSelect');
             }
-            var colorIndex = gLegend.rows[legendId][4];
+            var colorIndex = gLegend.rows[legendId].intKey;
             renderer.selectByColor(colorIndex);
-            menuBarShow("#tpFilterButton");
-            menuBarShow("#tpOnlySelectedButton");
+            //menuBarShow("#tpFilterButton");
+            //menuBarShow("#tpOnlySelectedButton");
             $('#tpLegend_'+legendId).addClass('tpLegendSelect');
             gLegend.lastClicked=legendId;
             clearSelectionState();
@@ -3381,10 +4704,12 @@ var cellbrowser = function() {
         if (rows===undefined)
             return;
         for (var i = 0; i < rows.length; i++) {
-            var colorHex = rows[i][0];
-            var defColor = rows[i][1];
-            gLegend.rows[i][0] = null;
-            var saveKey = rows[i][5];
+            //var colorHex = rows[i][0];
+            //var defColor = rows[i][1];
+            var colorHex = rows[i].color;
+            var defColor = rows[i].defColor;
+            gLegend.rows[i].color = null;
+            var saveKey = rows[i].intKey;
             // also clear localStorage
             localStorage.removeItem(saveKey);
         }
@@ -3398,7 +4723,7 @@ var cellbrowser = function() {
         else
             sortBy = "freq";
 
-        cartSave("s_"+gLegend.fieldName,sortBy, gLegend.defaultSortBy);
+        saveToUrl("s_"+gLegend.metaInfo.name,sortBy, gLegend.defaultSortBy);
         legendSort(sortBy);
         buildLegendBar();
     }
@@ -3406,7 +4731,7 @@ var cellbrowser = function() {
 
     function onMetaRightClick (key, options) {
     /* user right-clicks on a meta field */
-        var metaIdx = parseInt(options.$trigger[0].id.split("_")[1]);
+        var metaName = options.$trigger[0].id.split("_")[1];
 
         //if (key==0) {
             //gCurrentDataset.labelField = gCurrentDataset.metaFields[metaIdx];
@@ -3415,8 +4740,8 @@ var cellbrowser = function() {
             //renderer.render(stage);
             //updateMenu();
         //}
-        if (key==0) {
-            copyToClipboard("#tpMeta_"+metaIdx);
+        if (key===0) {
+            copyToClipboard("#tpMeta_"+metaName);
             //$("textarea").select();
             //document.execCommand('copy');
             //console.log(val);
@@ -3459,7 +4784,7 @@ var cellbrowser = function() {
     /* draws current legend as specified by gLegend.rows
      * sortBy can be "name" or "count" or "undefined" (=auto-detect)
      * */
-        if (gLegend.rows==undefined)
+        if (gLegend.rows===undefined)
             return;
 
         $('#tpLegendContent').empty();
@@ -3477,54 +4802,58 @@ var cellbrowser = function() {
         // get the sum of all, to calculate frequency
         var sum = 0;
         for (var i = 0; i < rows.length; i++) {
-            var count = rows[i][3];
+            let count = rows[i].count;
             sum += count;
         }
 
-        var acronyms = db.conf.acronyms;
-        if (acronyms===undefined)
-            acronyms = {};
+        //var acronyms = db.conf.acronyms;
+        //if (acronyms===undefined)
+            //croacronyms = {};
 
-        for (var i = 0; i < rows.length; i++) {
+        for (i = 0; i < rows.length; i++) {
             var row = rows[i];
-            var colorHex = row[0]; // manual color
+            var colorHex = row.color; // manual color
             if (colorHex===null)
-                colorHex = row[1]; // default color
+                colorHex = row.defColor; // default color
 
-            var label = row[2];
+            var label = row.label;
+            var longLabel = row.longLabel;
 
-            var count = row[3];
+            let count = row.count;
+            var valueIndex = row.intKey;
             var freq  = 100*count/sum;
+
+            if (count===0) // never output categories with 0 count. 
+                continue;
 
             var labelClass = "tpLegendLabel";
             label = label.replace(/_/g, " ").replace(/'/g, "&#39;").trim();
 
             if (likeEmptyString(label)) {
                 labelClass += " tpGrey";
-                colorHex = cNullColor;
+                //colorHex = cNullColor;
             }
             if (label==="") {
                 label = "(empty)";
             }
 
-            colors.push(colorHex); // save for later
+            colors.push([i, colorHex]); // save for later
 
-            var labelDesc = label;
-            var labelDesc = acronyms[label] || null;
-            if (labelDesc===null) {
-                // only show the full value on mouse over if the label is long, "" suppresses mouse over
-                if (label.length > 20 || labelDesc===null)
-                    labelDesc = label;
-                else
-                    labelDesc = "";
+            var mouseOver = "";
+            // only show the full value on mouse over if the label is long, "" suppresses mouse over
+            if (longLabel)
+                mouseOver = longLabel;
+            else {
+                if (label.length > 20)
+                    mouseOver = label;
             }
 
             var classStr = "tpLegend";
-            var line = "<div id='tpLegend_" +i+ "' class='" +classStr+ "'>";
+            var line = "<div id='tpLegend_" +valueIndex+ "' class='" +classStr+ "'>";
             htmls.push(line);
             htmls.push("<input class='tpColorPicker' id='tpLegendColorPicker_"+i+"' />");
 
-            htmls.push("<span class='"+labelClass+"' id='tpLegendLabel_"+i+"' data-placement='auto top' title='"+labelDesc+"'>");
+            htmls.push("<span class='"+labelClass+"' id='tpLegendLabel_"+i+"' data-placement='auto top' title='"+mouseOver+"'>");
             htmls.push(label);
             htmls.push("</span>");
             //htmls.push("<span class='tpLegendCount'>"+count+"</div>");
@@ -3570,31 +4899,39 @@ var cellbrowser = function() {
         //$.contextMenu( menuOpt );
 
         // activate the color pickers
-        for (var i = 0; i < colors.length; i++) {
+        for (let i = 0; i < colors.length; i++) {
+            var colInfo = colors[i];
+            var rowIdx = colInfo[0];
+            var hexCode = colInfo[1];
+
             var opt = {
                 hideAfterPaletteSelect : true,
-                color : colors[i],
+                color : hexCode,
                 showPalette: true,
                 //allowEmpty : true,
                 showInput: true,
                 preferredFormat: "hex",
                 change: onColorPickerChange
                 }
-            $("#tpLegendColorPicker_"+i).spectrum(opt);
+            $("#tpLegendColorPicker_"+rowIdx).spectrum(opt);
         }
 
         buildViolinPlot();
 
     }
 
-    function onColorPickerChange(color) {
+    function onColorPickerChange(color, ev) {
         /* called when user manually selects a color in the legend with the color picker */
+        console.log(ev);
+        /* jshint validthis: true */
         var valueIdx = parseInt(this.id.split("_")[1]);
         var rows = gLegend.rows;
         var clickedRow = rows[valueIdx];
-        var oldColorHex = clickedRow[0];
-        var defColorHex = clickedRow[1];
+        var oldColorHex = clickedRow.color;
+        var defColorHex = clickedRow.defColor;
+        var valueKey = clickedRow.strKey;
 
+        /* jshint validthis: true */
         var newCol = $(this).spectrum('get');
 
         var newColHex = "";
@@ -3602,11 +4939,10 @@ var cellbrowser = function() {
             newColHex = oldColorHex; // if user clicked abort, revert to default color
         else
             newColHex = newCol.toHex();
-        clickedRow[0] = newColHex;
+        clickedRow.color = newColHex;
 
-        var saveKey = COL_PREFIX+clickedRow[5];
         // save color to cart if necessary
-        cartSave(saveKey, newColHex, defColorHex);
+        saveToUrl(valueKey, newColHex, defColorHex);
 
         var colors = legendGetColors(gLegend.rows);
         renderer.setColors(colors);
@@ -3638,12 +4974,11 @@ var cellbrowser = function() {
             var sum = 0;
 
             var avg = 0;
-            if (cellIds!==null && cellIds.length!=0) {
+            if (cellIds!==null && cellIds.length!==0) {
                 for (var ci=0; ci<cellIds.length; ci++) {
                     sum += vec[cellIds[ci]];
                 }
                 avg = Math.round(sum / cellIds.length);
-                //console.log("sum "+sum+" avg "+avg);
             }
             var color = pal[avg];
 	    var fontColor = "#333333";
@@ -3655,24 +4990,33 @@ var cellbrowser = function() {
         console.timeEnd("avgCalc");
     }
 
-    function countValues(arr) {
-        /* count values in array, return an array of [value, count], sorted by count */
-        // first make a list of all possible meta values and their counts
-        var metaData = gCurrentDataset.metaData;
+    function makeFieldHistogram(metaInfo, selCellIds, metaVec) {
+        /* count the values in metaInfo and return a sorted array of [count, fraction, valIndex] */
+        let cellCount = selCellIds.length;
+        if (!metaInfo.ui.shortLabels && (metaInfo.type === "float" || metaInfo.type === "int")) {
+            // it's a numeric field, so let's create the labels now, they are derived from the bins 
+            let shortLabels = [];
+            for (let bin of metaInfo.binInfo)
+                shortLabels.push(labelForBinMinMax(bin[0], bin[1])); // 0,1 is min,max of the bin
+            metaInfo.ui.shortLabels = shortLabels;
+        }
         var metaCounts = {};
-        for (var i = 0; i < pixelCoords.length; i++) {
-            var cellId = pixelCoords[i][0];
-            var metaRow = metaData[cellId];
-            var metaVal = metaRow[metaIndex];
+        // make an object with value -> count in the cells
+        for (var i = 0; i < cellCount; i++) {
+            var cellId = selCellIds[i];
+            var metaVal = metaVec[cellId];
             metaCounts[metaVal] = 1 + (metaCounts[metaVal] || 0);
         }
-
-        var counts = {};
-        for (var i = 0; i < arr.length; i++) {
-            var val = arr[i];
-            counts[val] = (counts[num] || 0) + 1;
-            var metaVal = metaRow[metaIndex];
+        // convert the object to an array (count, percent, value) and sort it by count
+        var histoList = [];
+        for (var key in metaCounts) {
+            let intKey = parseInt(key);
+            let count = metaCounts[key];
+            let frac = (count / cellCount);
+            histoList.push([count, frac, intKey]);
         }
+        histoList = histoList.sort(function (a, b) { return b[0] - a[0]; }); // reverse-sort by count
+        return histoList;
     }
 
     function updateMetaBarManyCells(cellIds) {
@@ -3690,32 +5034,30 @@ var cellbrowser = function() {
 
         // for every field...
         var metaHist = {};
-        // we skip the first field, as it's the ID and cannot be summarized
-        for (var metaIdx = 1; metaIdx < metaFieldInfos.length; metaIdx++) {
-            var fieldInfo = metaFieldInfos[metaIdx];
-            var metaVec = db.allMeta[fieldInfo.name];
-            var metaCounts = {};
-            // make an object of value -> count in the cells
-            for (var i = 0; i < cellCount; i++) {
-                var cellId = cellIds[i];
-                var metaVal = metaVec[cellId];
-                metaCounts[metaVal] = 1 + (metaCounts[metaVal] || 0);
+        for (var metaIdx = 0; metaIdx < metaFieldInfos.length; metaIdx++) {
+            var metaInfo = metaFieldInfos[metaIdx];
+
+            var metaVec = [];
+            if (metaInfo.isCustom)
+                metaVec = metaInfo.arr;
+            else
+                metaVec = db.allMeta[metaInfo.name];
+            if (metaVec===undefined) {
+                if (metaInfo.type!=="uniqueString")
+                    alert("cellBrowser.js:updateMetaBarManyCells - could not find meta info");
+                else 
+                    $('#tpMeta_'+metaIdx).html("(unique identifier field)");
+                continue;
             }
-            // convert the object to an array (count, percent, value) and sort it by count
-            var histoList = [];
-            for (var key in metaCounts) {
-                var count = metaCounts[key];
-                var frac  = (count / cellCount);
-                histoList.push( [count, frac, key] );
-            }
-            histoList = histoList.sort(function(a, b){ return b[0] - a[0]; }); // reverse-sort by count
-            metaHist[metaIdx] = histoList;
+
+            var histoList = makeFieldHistogram(metaInfo, cellIds, metaVec); // reverse-sort by count
+            metaHist[metaInfo.name] = histoList;
 
             // make a quick list of the top values for the sparklines, ignore the rest
             var countList = [];
             var otherCount = 0;
-            for (var i=0; i < histoList.length; i++) {
-                var count = histoList[i][0];
+            for (let i=0; i < histoList.length; i++) {
+                let count = histoList[i][0];
                 if (i<SPARKHISTOCOUNT)
                     countList.push(count);
                 else
@@ -3746,8 +5088,8 @@ var cellbrowser = function() {
             else
                 label = topVal;
 
-            $('#tpMeta_'+metaIdx).html(label);
-            $('#tpMetaSpark_'+metaIdx).sparkline(countList, {type:"bar", barSpacing:0, disableTooltips:true});
+            $('#tpMeta_'+metaInfo.name).html(label);
+            $('#tpMetaSpark_'+metaInfo.name).sparkline(countList, {type:"bar", barSpacing:0, disableTooltips:true});
 
             //var topCount = countList[0][0];
             //var topPerc  = countList[0][1];
@@ -3760,47 +5102,58 @@ var cellbrowser = function() {
     }
 
     function clearMetaAndGene() {
-        /* clear the meta and gene field field info */
-        var fieldCount = db.getMetaFields().length;
-        for (var i = 0; i < fieldCount; i++) {
-            $('#tpMeta_'+i).attr('title', "");
-            $('#tpMeta_'+i).html("");
+        /* called when user hovers over nothing - clear the meta and gene field field info, hide the tooltip */
+        $('#tpMeta_custom').html("");
+
+        var fieldCount = db.getMetaFields();
+        for (let metaInfo of db.getMetaFields()) {
+            $('#tpMeta_'+metaInfo.name).attr('title', "").html("");
         }
+        $('#tpMetaNote').hide();
         updateGeneTableColors(null);
+    }
+
+    function updateMetaBarCustomFields(cellId) {
+        /* update custom meta fields with custom data */
+        if (!db.getMetaFields()[0].isCustom)
+            return;
+
+        let metaInfo = db.getMetaFields()[0];
+        let intVal = metaInfo.arr[cellId];
+        let strVal = metaInfo.ui.shortLabels[intVal];
+        let rowDiv = $('#tpMeta_custom').html(strVal);
     }
 
     function updateMetaBarOneCell(cellInfo, otherCellCount) {
         /* update the meta bar with meta data from a single cellId */
         $('#tpMetaTitle').text(METABOXTITLE);
+
+        let customCount = 0;
+        if (db.getMetaFields()[0].isCustom)
+            customCount = 1;
+
+        let fieldInfos = db.getMetaFields();
+
         for (var i = 0; i < cellInfo.length; i++) {
             var fieldValue = cellInfo[i];
+            let metaIdx = i + customCount;
+            let metaInfo = fieldInfos[metaIdx];
+
+            let rowDiv = $('#tpMeta_'+metaInfo.name);
             if (fieldValue.startsWith("http") && fieldValue.endsWith(".png")) {
-                $('#tpMeta_'+i).css('height', "40px");
-                $('#tpMeta_'+i).html("<img src='"+fieldValue+"'></img>");
+                rowDiv.css('height', "40px");
+                rowDiv.html("<img src='"+fieldValue+"'></img>");
             } else
-                $('#tpMeta_'+i).html(fieldValue);
-            $('#tpMeta_'+i).attr('title', cellInfo[i]);
+                rowDiv.html(fieldValue);
+            rowDiv.attr('title', cellInfo[i]);
         }
+
         if (otherCellCount===0)
             $("#tpMetaNote").hide();
         else {
             $("#tpMetaNote").html("...and "+(otherCellCount)+" other "+gSampleDesc+"s underneath");
             $("#tpMetaNote").show();
         }
-    }
-
-    function onDotMouseOver (mouseData) {
-        /* user hovers over a circle with the mouse */
-        if (mouseDownX!=null) // user is currently zooming
-            return;
-        if (! (gSelCellIds===null || jQuery.isEmptyObject(gSelCellIds))) // some cells are selected
-            return;
-        var cellId = mouseData.target.cellId;
-        this.alpha = 1.0;
-        //renderer.render(stage);
-
-        //db.loadMetaForCell(cellId, function(ci) { updateMetaBarOneCell(ci);} onProgress);
-        updateGeneTableColors([cellId]);
     }
 
     function clearSelectionState() {
@@ -3813,11 +5166,11 @@ var cellbrowser = function() {
 
     function onCellClickOrHover (cellIds, ev) {
         /* user clicks onto a circle with the mouse or hovers over one.
-         * ev is undefined if not a click. */
+         * ev is undefined if not a click. cellIds is none if click was on empty background. */
 
         // do nothing if only hover but something is already selected
         var selCells = renderer.getSelection();
-        if (ev===undefined && selCells!==null && selCells.length!==0) {
+        if (ev===undefined && selCells.length!==0) {
             $("#tpHoverHint").hide();
             $("#tpSelectHint").show();
             return;
@@ -3826,18 +5179,26 @@ var cellbrowser = function() {
         $("#tpHoverHint").show();
         $("#tpSelectHint").hide();
 
+        // if click into background, remove any legend selection
+        if (cellIds===null)
+            $(".tpLegendLabel").removeClass("tpLegendSelect");
+
         if (cellIds===null || cellIds.length===0) {
             clearMetaAndGene();
         } else {
             var cellId = cellIds[0];
             var cellCountBelow = cellIds.length-1;
+            updateMetaBarCustomFields(cellId);
             db.loadMetaForCell(cellId, function(ci) { updateMetaBarOneCell(ci, cellCountBelow);}, onProgress);
         }
 
         updateGeneTableColors(cellIds);
 
-        if (ev!==undefined) {
-            // it was a click
+        if (ev===undefined) {
+            db.metaHist = null;
+        } else {
+            // it was a click -> we have at least one cell ID
+            let cellId = cellIds[0];
             if (!ev.shiftKey && !ev.ctrlKey && !ev.metaKey)
                 renderer.selectClear();
             clearSelectionState();
@@ -3847,13 +5208,49 @@ var cellbrowser = function() {
         }
     }
 
-    function onClusterNameHover(clusterName, ev) {
+    function showTooltip(x, y, labelStr) {
+    $("#tpTooltip").css({
+        "display":"block",
+        "left" : x,
+        "top" : y,
+       }).html(labelStr);
+    }
+
+    function hideTooltip() {
+        $("#tpTooltip").hide();
+    }
+
+    function onClusterNameHover(clusterName, nameIdx, ev) {
        /* user hovers over cluster label */
-       //var htmls = [];
-       //htmls.push("<div class='tpHover'>"+clusterName+"</div>");
-       //$(document.body).append(htmls.join(""));
-       console.log("Hover over "+clusterName);
-       console.log(ev);
+       var labelLines = [clusterName];
+       
+       var labelField = db.conf.labelField;
+       var metaInfo = db.findMetaInfo(labelField);
+       var longLabels = metaInfo.ui.longLabels;
+       if (longLabels) {
+            for (let i=0; i<longLabels.length; i++) {
+                let shortLabel = metaInfo.ui.shortLabels[i];
+                let longLabel = longLabels[i];
+                if (clusterName===shortLabel && longLabel!==shortLabel) {
+                    labelLines.push(longLabels[i]);
+                    break;
+                }
+            }
+       }
+
+       if (db.conf.topMarkers!==undefined) {
+            labelLines.push("Top markers: "+db.conf.topMarkers[clusterName].join(", "));
+        }
+       if (db.conf.markers!==undefined)
+            labelLines.push("Click to show full marker gene list.");
+
+        showTooltip(ev.clientX+15, ev.clientY, labelLines.join("<br>"));
+        //renderer.canvas.style.cursor = "pointer";
+    }
+
+    function onNoClusterNameHover(ev) {
+        hideTooltip();
+        //renderer.canvas.style.cursor = "default";
     }
 
     function sanitizeName(name) {
@@ -3868,67 +5265,209 @@ var cellbrowser = function() {
         return newName;
     }
 
+    function onActRendChange(otherRend) {
+        /* called after the user has activated a view with a click */
+        renderer.legend = gLegend;
+        renderer = otherRend;
+        gLegend = otherRend.legend;
+        $("#tpLayoutCombo").val( otherRend.coordIdx ).trigger('chosen:updated');
+        buildLegendBar();
+    }
+
     function onSplitClick() {
         /* user clicked on View > Split Screen */
-        var rendererHeight  = window.innerHeight - menuBarHeight - toolBarHeight;
-        var canvLeft   = renderer.left;
+        if (!renderer.childPlot && !renderer.parentPlot) {
+            // nothing is split yet -> start the split
+            renderer.onActiveChange = onActRendChange;
 
-        // remove split screen view
-        if (renderer2!==null) {
-            var canvWidth = window.innerWidth - canvLeft - legendBarWidth;
-            renderer.setSize(canvWidth, rendererHeight);
-            renderer2.div.remove();
-            renderer2 = null;
-            return;
+            var currCoordIdx = $("#tpLayoutCombo").val();
+            renderer.legend = gLegend;
+            renderer.coordIdx = currCoordIdx; // keep for onActRendChange
+            renderer.isMain = true;
+
+            renderer.split();
+
+            renderer.childPlot.legend = gLegend;
+            renderer.childPlot.coordIdx = currCoordIdx; // keep for onActRendChange
+
+            $("#tpSplitMenuEntry").text("Unsplit Screen");
+            $("#mpCloseButton").click(onSplitClick);
+        } else {
+            // stop the split
+            if (!renderer.isMain) {
+                // make sure the left renderer is the active one
+                renderer.childPlot.activatePlot();
+            }
+            renderer.unsplit();
+            $("#tpSplitMenuEntry").text("Split Screen");
+        }
+        renderer.drawDots();
+    }
+
+    function groupAverages(geneArrs, arrGroups, groupCount) {
+        /* given an array of gene expression vectors (ints), and a 2nd array that assigns these to groups, 
+        return an array of the arrays with the averages for the groups (as integers)
+        */ 
+        let geneAvgs = [];
+
+        for (let geneIdx=0; geneIdx < geneArrs.length; geneIdx++) {
+            let geneArr = geneArrs[geneIdx];
+
+            let groupSums = new Uint32Array(groupCount);
+            let groupCounts = new Uint32Array(groupCount);
+            //for (var groupIdx=0; groupIdx < groupCount; groupIdx++) {
+            //    groupSums.push(0);
+            //    groupCounts.push(0);
+            //}
+ 
+            for (let i=0; i<geneArr.length; i++) {
+                let group = arrGroups[i];
+                groupSums[group] += geneArr[i];
+                groupCounts[group]++;
+            }
+
+            let groupAvgs = [];
+            for (var groupIdx=0; groupIdx < groupCount; groupIdx++)
+                groupAvgs.push(Math.round(groupSums[groupIdx]/groupCounts[groupIdx]));
+            geneAvgs.push(groupAvgs);
+            
+        }
+        return geneAvgs;
+    }
+
+    function onHeatCellHover(rowIdx, colIdx, rowName, colName, value, ev) {
+        /* user hovers over a cell on the heatmap */
+        let htmls = [];
+        if (rowName)
+            htmls.push(rowName);
+        if (colName)
+            htmls.push(colName)    
+        if (value!==null)
+            htmls.push(" "+(value*10)+"-"+((value+1)*10)+"%");
+        showTooltip(ev.clientX+15, ev.clientY, htmls.join(" "));
+    }
+
+    function plotHeatmap(clusterMetaInfo, exprVecs, geneSyms) {
+        /* Create the heatmap from exprVecs. 
+        */
+        var clusterCount = clusterMetaInfo.valCounts.length;
+        
+        var clusterNames = [];
+        for (let valInfo of clusterMetaInfo.valCounts) {
+            clusterNames.push(valInfo[0]); // 0=name, 1=count
         }
 
-        var newWidth = renderer.width/2;
-        renderer.setSize(newWidth, rendererHeight);
+        var clusterArr = clusterMetaInfo.arr;
+        var geneAvgs = groupAverages(exprVecs, clusterArr, clusterCount);
+        
+        var div = document.createElement("div");
+        //let heatHeight = Math.min(150, 16*exprVecs.length);
+        let heatHeight = parseInt(renderer.height*0.5);
+        div.id = "tpHeat";
+        div.style.height = heatHeight+"px";
 
-        var div = document.createElement('div');
-        div.id = "tpMaxPlot2";
-        var canvTop  = menuBarHeight+toolBarHeight;
-        var canvLeft2 = canvLeft + renderer.width;
-        renderer2 = new MaxPlot(div, canvTop, canvLeft2, newWidth, rendererHeight, {"interact":false});
-        renderer2.canvas.style.borderLeft = "1px solid grey";
+        renderer.setSize(renderer.getWidth(), renderer.height-heatHeight, true);
+        
+        var canvLeft = metaBarWidth+metaBarMargin;
+        var heatWidth = window.innerWidth - canvLeft - legendBarWidth;
+        // create the div for the heat map view
+        div.style.width = heatWidth+"px";
+        div.style.left = metaBarWidth+"px";
+        div.style.top = (menuBarHeight+toolBarHeight+renderer.height)+"px";
+        div.style.position = "absolute";
         document.body.appendChild(div);
-        renderer.connect(renderer2);
-        renderer.drawDots();
+
+        var heatmap = new MaxHeat(div, {mainRenderer:renderer}); 
+        //var colors = getFieldColors(clusterMetaInfo)
+        var colors = makeColorPalette(cDefGradPaletteHeat, 10);
+
+        heatmap.loadData(geneSyms, clusterNames, geneAvgs, colors);
+        heatmap.draw();
+        heatmap.onCellHover = onHeatCellHover;
+        db.heatmap = heatmap;
+    }
+
+ 
+
+    function onHeatClick() {
+        // TODO: rewrite this one day with promises...
+        let resultCount = 0;
+        let exprVecs = [];
+        let geneSyms = [];
+        let metaInfo = null;
+
+        function partDone() {
+            resultCount++;
+            if (resultCount===2)
+                plotHeatmap(metaInfo, exprVecs, geneSyms);
+        }
+
+        function onClusterMetaDone(metaArr, metaInfo) {
+            metaInfo.arr = metaArr;
+            partDone();
+        }
+
+        function onGenesDone(geneVecs) {
+            /* */
+            for (var geneInfo of geneVecs) {
+                geneSyms.push(geneInfo[0]); // gene symbol
+                exprVecs.push(geneInfo[1]); // binned expression vector
+            }
+            partDone();
+        }
+
+        /* user clicked on View > Heatmap */
+        if (db && db.heatmap) {
+            // remove the heatmap
+            let heatHeight = db.heatmap.height;
+            document.getElementById("tpHeat").remove();
+            delete db.heatmap;
+            renderer.setSize(renderer.getWidth(), renderer.height+heatHeight, true);
+            changeUrl({'heat':null});
+        }
+        else {
+            db.loadGeneSetExpr(onGenesDone);
+            metaInfo = getClusterFieldInfo();
+            db.loadMetaVec(metaInfo, onClusterMetaDone, onProgress);
+            changeUrl({"heat":"1"});
+        }
     }
 
     function onClusterNameClick(clusterName) {
         /* build and open the dialog with the marker genes table for a given cluster */
+        var metaInfo = getClusterFieldInfo();
+        var nameIdx = metaInfo.ui.shortLabels.indexOf(clusterName);
+
         var tabInfo = db.conf.markers; // list with (label, subdirectory)
 
         console.log("building marker genes window for "+clusterName);
         var htmls = [];
         htmls.push("<div id='tpPaneHeader' style='padding:0.4em 1em'>");
 
-        var buttons = {};
+        var buttons = [];
 
         if (tabInfo===undefined || tabInfo.length===0) {
             tabInfo = [];
-            buttons["Close"] = function() { $( this ).dialog( "close" )}; 
+            buttons.push({
+                text:"Close", 
+                click: function() { $( this ).dialog( "close" ) }
+            }); 
             htmls.push("No marker genes are available in this dataset. " +
                 "To add marker genes, contact the original authors of the dataset and ask them to add " +
                 " them to the cell browser.");
         } else {
             htmls.push("Click gene symbols below to color plot by gene<br>");
-            buttons["Download as file"] = function() {
+            buttons.push({
+                text:"Download as file", 
+                click: function() {
                     //url = joinPaths([baseUrl,"geneMatrix.tsv"]);
                     document.location.href = markerTsvUrl;
-                };
-
+                }
+            });
         }
         htmls.push("</div>");
 
         var doTabs = (tabInfo.length>1);
-
-        //var hubUrl = db.conf.hubUrl;
-        //if (hubUrl!==undefined) {
-            //htmls.push("<p>");
-            //htmls.push("<a target=_blank class='link' href='"+hubUrl+"'>Show Sequencing Reads on UCSC Genome Browser</a><p>");
-        //}
 
         if (doTabs) {
             htmls.push("<div id='tabs'>");
@@ -3940,7 +5479,7 @@ var cellbrowser = function() {
             htmls.push("</ul>");
         }
 
-        for (var tabIdx = 0; tabIdx < tabInfo.length; tabIdx++) {
+        for (let tabIdx = 0; tabIdx < tabInfo.length; tabIdx++) {
             var divName = "tabs-"+tabIdx;
             var tabDir = tabInfo[tabIdx].name;
             var sanName = sanitizeName(clusterName);
@@ -3957,9 +5496,17 @@ var cellbrowser = function() {
         var winWidth = window.innerWidth - 0.10*window.innerWidth;
         var winHeight = window.innerHeight - 0.10*window.innerHeight;
         var title = "Cluster markers for &quot;"+clusterName+"&quot;";
-        var acronyms = db.conf.acronyms;
-        if (acronyms!==undefined && clusterName in acronyms)
-            title += " - "+acronyms[clusterName];
+        
+        var metaInfo = getClusterFieldInfo();
+        if (metaInfo.ui.longLabels) {
+            //var nameIdx = cbUtil.findIdxWhereEq(metaInfo.ui.shortLabels, 0, clusterName);
+            //var acronyms = db.conf.acronyms;
+            //title += " - "+acronyms[clusterName];
+            title += " - "+metaInfo.ui.longLabels[nameIdx];
+        }
+
+        //if (acronyms!==undefined && clusterName in acronyms)
+            //title += " - "+acronyms[clusterName];
         showDialogBox(htmls, title, {width: winWidth, height:winHeight, "buttons":buttons});
         $(".ui-widget-content").css("padding", "0");
         $("#tabs").tabs();
@@ -4016,6 +5563,7 @@ var cellbrowser = function() {
         var geneListCol = null;
         var exprCol = null;
         var pValCol = null
+        //var doDescSort = false;
         for (var i = 1; i < headerRow.length; i++) {
             var colLabel = headerRow[i];
             var isNumber = false;
@@ -4033,10 +5581,13 @@ var cellbrowser = function() {
                 colLabel = "Gene Lists";
                 geneListCol = i;
             }
-            else if (colLabel==="P_value" || colLabel==="p_val" || colLabel=="pVal") {
+            else if (colLabel==="P_value" || colLabel==="p_val" || colLabel==="pVal") {
                 colLabel = "P-value";
                 pValCol = i;
+                //if (i===2)
+                    //doDescSort = true;
             }
+            
             else if (colLabel==="_expr") {
                 colLabel = "Expression";
                 exprCol = i;
@@ -4055,6 +5606,7 @@ var cellbrowser = function() {
                 htmls.push("<th"+addStr+">");
             else
                 htmls.push("<th style='width:"+width+"'"+addStr+">");
+            colLabel = colLabel.replace(/_/g, " ");
             htmls.push(colLabel);
             htmls.push("</th>");
         }
@@ -4063,7 +5615,7 @@ var cellbrowser = function() {
         var hubUrl = makeHubUrl();
 
         htmls.push("<tbody>");
-        for (var i = 1; i < rows.length; i++) {
+        for (let i = 1; i < rows.length; i++) {
             var row = rows[i];
             if ((row.length===1) && row[0]==="") // papaparse sometimes adds empty lines to files
                 continue;
@@ -4102,6 +5654,7 @@ var cellbrowser = function() {
         htmls.push("</tbody>");
         htmls.push("</table>");
 
+        // sub function ----
         function onMarkerGeneClick(ev) {
             /* user clicks onto a gene in the table of the marker gene dialog window */
             var geneSym = ev.target.getAttribute("data-gene");
@@ -4116,8 +5669,12 @@ var cellbrowser = function() {
             }
             loadGeneAndColor(geneSym);
         }
+        // ----
 
         $("#"+divId).html(htmls.join(""));
+        var sortOpt = {};
+        //if (doDescSort)
+            //sortOpt.descending=true;
         new Tablesort(document.getElementById('tpMarkerTable'));
         $(".tpLoadGeneLink").on("click", onMarkerGeneClick);
         activateTooltip(".link");
@@ -4148,8 +5705,8 @@ var cellbrowser = function() {
             var pair = pairs[i].split('=');
 
             // if we find foo=1+1=2
-            if(pair.length != 2) {
-                pair = [pair[0], pair.slice(1).join("=")]
+            if(pair.length !== 2) {
+                pair = [pair[0], pair.slice(1).join("=")];
             }
 
             var key = decodeURIComponent(pair[0].replace(plus, " ")),
@@ -4160,13 +5717,13 @@ var cellbrowser = function() {
                 var part = parts[j];
                 if (!current[part] ) {
                     // if what we are pointing to looks like an array
-                    current[part] = digitTest.test(parts[j+1]) || parts[j+1] == "[]" ? [] : {}
+                    current[part] = digitTest.test(parts[j+1]) || parts[j+1] === "[]" ? [] : {};
                 }
                 current = current[part];
             }
             var lastPart = parts[parts.length - 1];
-            if(lastPart == "[]"){
-                current.push(value)
+            if(lastPart === "[]"){
+                current.push(value);
             }else{
                 current[lastPart] = value;
             }
@@ -4182,11 +5739,12 @@ var cellbrowser = function() {
        var urlParts = myUrl.split("?");
        var baseUrl = urlParts[0];
 
+       let urlVars;
        if (oldVars===undefined) {
            var queryStr = urlParts[1];
-           var urlVars = deparam(queryStr); // parse key=val&... string to object
+           urlVars = deparam(queryStr); // parse key=val&... string to object
        } else {
-           urlVars = oldVars
+           urlVars = oldVars;
        }
 
        // overwrite everthing that we got
@@ -4199,7 +5757,17 @@ var cellbrowser = function() {
        }
 
        var argStr = jQuery.param(urlVars); // convert to query-like string
-       history.pushState({}, db.getName(), baseUrl+"?"+argStr);
+
+       var dsName = "noname";
+       if (db!==null)
+            dsName = db.getName();
+
+       if (argStr.length > 1000)
+           warn("Cannot save current changes to the URL, the URL would be too long. "+
+               "You can try to shorten some cluster labels to work around the problem temporarily. "+
+               "But please contact us at cells@ucsc.edu and tell us about the error. Thanks!");
+        else
+           history.pushState({}, dsName, baseUrl+"?"+argStr);
     }
 
     function delState(varName) {
@@ -4243,7 +5811,7 @@ var cellbrowser = function() {
         if (zoomStr===null)
             return null;
         var zs = zoomStr.split("_");
-        if (zs.length!=4)
+        if (zs.length!==4)
             return null;
         var zoomRange = {};
         zoomRange.minX = parseFloat(zs[0]);
@@ -4301,7 +5869,7 @@ var cellbrowser = function() {
             return;
         gDatasetList = datasetList;
 
-        if (globalOpts!=undefined) {
+        if (globalOpts!==undefined) {
             if ("sampleType" in globalOpts)
                 gSampleDesc = globalOpts["sampleType"];
             if ("title" in globalOpts)
@@ -4312,6 +5880,10 @@ var cellbrowser = function() {
         buildMenuBar();
 
         var datasetName = extractDatasetFromUrl(datasetList)
+        var dsInfo = cbUtil.findIdxWhereEq(gDatasetList, "name", datasetName);
+        var md5 = null;
+        if (dsInfo)
+            md5 = dsInfo.md5; // stay backwards-compatible, tolerate datasets without a global md5
 
         //menuBarHide("#tpShowAllButton");
 
@@ -4327,6 +5899,11 @@ var cellbrowser = function() {
            div.id = "tpMaxPlot";
            renderer = new MaxPlot(div, canvTop, canvLeft, canvWidth, canvHeight);
            document.body.appendChild(div);
+           activateTooltip(".mpButton"); // tpMaxPlot has no special tooltip support itself
+
+
+           self.tooltipDiv = makeTooltipCont();
+           document.body.appendChild(self.tooltipDiv);
 
            //var htmls = [];
            //htmls.push("<div id='tpGeneProgress0'><div class='tpProgressLabel' id='tpProgressLabel0'>Loading...</div></div>");
@@ -4342,17 +5919,21 @@ var cellbrowser = function() {
 
         renderer.onLabelClick = onClusterNameClick;
         renderer.onLabelHover = onClusterNameHover;
+        renderer.onNoLabelHover = onNoClusterNameHover;
         renderer.onCellClick = onCellClickOrHover;
         renderer.onCellHover = onCellClickOrHover;
         renderer.onNoCellHover = clearMetaAndGene;
         renderer.onZoom100Click = onZoom100Click;
         renderer.onSelChange = onSelChange;
+        renderer.canvas.addEventListener("mouseleave", hideTooltip);
 
-        if (datasetName===undefined)
-            openDatasetDialog();
+        //var collName = getVar("coll");
+        //if (collName)
+            //showCollectionDialog(collName);
+        if (datasetName)
+            loadDataset(datasetName, false, md5);
         else
-            loadDataset(datasetName, false);
-
+            openDatasetDialog(gDatasetList, gDatasetList[0]);
     }
 
     // only export these functions
@@ -4361,6 +5942,8 @@ var cellbrowser = function() {
     }
 
 }();
+
+
 
 function _tpReset() {
 /* for debugging: reset the intro setting */

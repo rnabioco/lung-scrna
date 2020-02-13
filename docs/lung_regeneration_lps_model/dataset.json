@@ -1,0 +1,372 @@
+{
+  "name": "lung_regeneration_lps_model",
+  "shortLabel": "lung_regeneration_lps_model",
+  "priority": 1,
+  "clusterField": "cell_types",
+  "fileVersions": {
+    "inMeta": {
+      "fname": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/final_files/cellbrowser_v2/lung_regeneration_lps_model/meta.tsv",
+      "md5": "ca10289be6",
+      "size": 1481220,
+      "mtime": "2020-02-13 00:54:10"
+    },
+    "outMeta": {
+      "fname": "cellbrowser_v2/lung/lung_regeneration_lps_model/meta.tsv",
+      "md5": "ca10289be6",
+      "size": 1481220,
+      "mtime": "2020-02-13 00:54:13"
+    },
+    "inMatrix": {
+      "fname": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/final_files/cellbrowser_v2/lung_regeneration_lps_model/exprMatrix.tsv.gz",
+      "md5": "3e0c6ff97b",
+      "size": 192762428,
+      "mtime": "2020-02-13 00:33:43"
+    },
+    "outMatrix": {
+      "fname": "cellbrowser_v2/lung/lung_regeneration_lps_model/exprMatrix.tsv.gz",
+      "md5": "3e0c6ff97b",
+      "size": 192762428,
+      "mtime": "2020-02-13 00:49:49"
+    },
+    "conf": {
+      "fname": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/final_files/cellbrowser_v2/lung_regeneration_lps_model/cellbrowser.conf",
+      "md5": "346f6e3637",
+      "size": 594,
+      "mtime": "2020-02-13 00:54:10"
+    }
+  },
+  "sampleCount": 11020,
+  "matrixWasFiltered": false,
+  "metaFields": [
+    {
+      "name": "Cell",
+      "label": "Cell",
+      "type": "uniqueString",
+      "maxSize": 34,
+      "diffValCount": 11020,
+      "md5": "dc0033cb0a"
+    },
+    {
+      "name": "sampleid",
+      "label": "sample_id",
+      "type": "enum",
+      "colors": [
+        "d62728",
+        "98df8a",
+        "2ca02c",
+        "ffbb78",
+        "ff7f0e",
+        "aec7e8",
+        "1f77b4",
+        "ff9896",
+        "c5b0d5",
+        "9467bd"
+      ],
+      "valCounts": [
+        [
+          "ATIIinjured2expt2",
+          4051
+        ],
+        [
+          "ATIIinjured1expt2",
+          3843
+        ],
+        [
+          "ATIIinjured1expt1",
+          849
+        ],
+        [
+          "ATIIinjured2expt1",
+          832
+        ],
+        [
+          "ATII1expt1",
+          533
+        ],
+        [
+          "ATI2expt1",
+          281
+        ],
+        [
+          "ATI1expt1",
+          221
+        ],
+        [
+          "ATI1expt2",
+          155
+        ],
+        [
+          "ATII1expt2",
+          146
+        ],
+        [
+          "ATI2expt2",
+          109
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 10,
+      "md5": "cdb2c704ec"
+    },
+    {
+      "name": "condition",
+      "label": "condition",
+      "type": "enum",
+      "colors": [
+        "009E73",
+        "E69F00",
+        "56B4E9"
+      ],
+      "valCounts": [
+        [
+          "Injured AEC2",
+          9575
+        ],
+        [
+          "Naive Non-AEC2 Epithelial",
+          766
+        ],
+        [
+          "Naive AEC2",
+          679
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 3,
+      "md5": "427cf42a53"
+    },
+    {
+      "name": "technicalreplicate",
+      "label": "technical_replicate",
+      "type": "enum",
+      "colors": [
+        "ff9896",
+        "c7c7c7"
+      ],
+      "valCounts": [
+        [
+          "1",
+          5747
+        ],
+        [
+          "2",
+          5273
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 2,
+      "md5": "3022a453c0"
+    },
+    {
+      "name": "GFPexpression",
+      "label": "GFP expression",
+      "arrType": "float32",
+      "type": "float",
+      "diffValCount": 158,
+      "md5": "cf9703759e"
+    },
+    {
+      "name": "proporitionofUMIsasmitochondria",
+      "label": "proporition of UMIs as mitochondria",
+      "arrType": "float32",
+      "type": "float",
+      "diffValCount": 10859,
+      "md5": "f2314e770d"
+    },
+    {
+      "name": "clusters",
+      "label": "clusters",
+      "type": "enum",
+      "colors": [
+        "f7b6d2",
+        "ff9896",
+        "c7c7c7",
+        "7f7f7f",
+        "8c564b",
+        "e377c2",
+        "c49c94",
+        "aec7e8",
+        "ffbb78",
+        "ff7f0e",
+        "c5b0d5",
+        "d62728",
+        "1f77b4",
+        "9467bd",
+        "98df8a",
+        "2ca02c"
+      ],
+      "valCounts": [
+        [
+          "0",
+          2581
+        ],
+        [
+          "1",
+          1719
+        ],
+        [
+          "2",
+          1583
+        ],
+        [
+          "3",
+          1436
+        ],
+        [
+          "4",
+          1411
+        ],
+        [
+          "5",
+          616
+        ],
+        [
+          "6",
+          350
+        ],
+        [
+          "7",
+          332
+        ],
+        [
+          "8",
+          309
+        ],
+        [
+          "9",
+          250
+        ],
+        [
+          "10",
+          119
+        ],
+        [
+          "11",
+          108
+        ],
+        [
+          "12",
+          77
+        ],
+        [
+          "13",
+          59
+        ],
+        [
+          "14",
+          51
+        ],
+        [
+          "15",
+          19
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 16,
+      "md5": "08149c2b6f"
+    },
+    {
+      "name": "celltypes",
+      "label": "cell_types",
+      "type": "enum",
+      "colors": [
+        "ff9896",
+        "56B4E9",
+        "c5b0d5",
+        "aec7e8",
+        "ff7f0e",
+        "ffbb78",
+        "9467bd",
+        "d62728",
+        "1f77b4",
+        "98df8a",
+        "2ca02c"
+      ],
+      "valCounts": [
+        [
+          "Other Injured AEC2",
+          8730
+        ],
+        [
+          "Naive AEC2",
+          616
+        ],
+        [
+          "Injured AEC2: Late Transdifferentiating",
+          350
+        ],
+        [
+          "Basal",
+          332
+        ],
+        [
+          "Club",
+          309
+        ],
+        [
+          "Injured AEC2: Early Transdifferentiating (Cell Cycle Arrest)",
+          309
+        ],
+        [
+          "Injured AEC2: Proliferating",
+          119
+        ],
+        [
+          "Macrophage",
+          108
+        ],
+        [
+          "Endothelial/Fibroblast",
+          77
+        ],
+        [
+          "Naive AEC1",
+          51
+        ],
+        [
+          "Ciliated",
+          19
+        ]
+      ],
+      "arrType": "Uint8",
+      "diffValCount": 11,
+      "md5": "264d67b4b4"
+    },
+    {
+      "name": "nCountRNA",
+      "label": "nCount_RNA",
+      "arrType": "float32",
+      "type": "int",
+      "diffValCount": 6942,
+      "md5": "80c689e3d1"
+    },
+    {
+      "name": "nFeatureRNA",
+      "label": "nFeature_RNA",
+      "arrType": "float32",
+      "type": "int",
+      "diffValCount": 2512,
+      "md5": "6e1c68c2ca"
+    }
+  ],
+  "matrixArrType": "Float32",
+  "labelField": "cell_types",
+  "coords": [
+    {
+      "name": "coords_0",
+      "shortLabel": "Seurat tsne",
+      "md5": "6d82662e52",
+      "minX": -46.961019375964,
+      "maxX": 38.2086699890326,
+      "minY": -52.4795217322958,
+      "maxY": 51.9308177745968,
+      "type": "Float32",
+      "labelMd5": "d41d8cd98f"
+    }
+  ],
+  "descMd5s": {
+    "summary": "b15deb563b"
+  },
+  "markers": [],
+  "md5": "d07fe03d40"
+}

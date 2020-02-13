@@ -1,0 +1,25 @@
+{
+  "name": "lung_regeneration_lps_model",
+  "shortLabel": "lung_regeneration_lps_model",
+  "exprMatrix": "exprMatrix.tsv.gz",
+  "meta": "meta.tsv",
+  "geneIdType": "auto",
+  "clusterField": "cell_types",
+  "labelField": "cell_types",
+  "enumFields": [
+    "sample_id",
+    "condition",
+    "technical_replicate",
+    "clusters",
+    "cell_types"
+  ],
+  "coords": [
+    {
+      "file": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/final_files/cellbrowser_v2/lung_regeneration_lps_model/tsne.coords.tsv",
+      "shortLabel": "Seurat tsne"
+    }
+  ],
+  "colors": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/final_files/cellbrowser_v2/lung_regeneration_lps_model_colorMap.csv",
+  "priority": 1,
+  "inDir": "cellbrowser_v2/lung_regeneration_lps_model"
+}

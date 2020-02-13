@@ -6,6 +6,8 @@
 <link rel="stylesheet" href="ext/jquery-ui-1.12.1.css?c4a88ec0cb">
 <link rel="stylesheet" href="ext/spectrum-1.8.0.css?66a13d52ed">
 <link rel="stylesheet" href="ext/jquery.contextMenu.css?7ddc26344e">
+<link rel="stylesheet" href="ext/slick.grid.css?88f28e8c82">
+<link rel="stylesheet" href="ext/slick.examples.css?b0f79f99d7">
 <link rel="stylesheet" href="ext/jquery.tipsy.1.0.3.min.css?318f97bdd6">
 <link rel="stylesheet" href="ext/bootstrap.min.css?433db1e05c">
 <link rel="stylesheet" href="ext/introjs.2.4.0.min.css?fbc96847c6">
@@ -15,10 +17,10 @@
 <link rel="stylesheet" href="ext/googleMaterialIcons.css?bdf9041572">
 <link rel="stylesheet" href="ext/chosen.1.8.2.min.css?5159e24a6e">
 <link rel="stylesheet" href="ext/select2.4.0.4.min.css?d44571114a">
-<link rel="stylesheet" href="ext/selectize.0.12.4.min.css?e0f9b1ec1a">
+<link rel="stylesheet" href="ext/selectize.bootstrap3.css?b56701547c">
 <link rel="stylesheet" href="ext/OverlayScrollbars.min.css?42d7623e3e">
-<link rel="stylesheet" href="css/cellBrowser.css?35b65ceb42">
-<script src="https://genome.ucsc.edu/js/cbTrackUsage.js"></script>
+<link rel="stylesheet" href="css/cellBrowser.css?11591eaaa1">
+<script async defer src="https://cells.ucsc.edu/js/cbTrackUsage.js"></script>
 <script src="ext/FileSaver.1.1.20151003.min.js?2b3d66a7b7"></script>
 <script src="ext/jquery.3.1.1.min.js?e071abda8f"></script>
 <script src="ext/palette.js?78a4a9d0f4"></script>
@@ -48,23 +50,37 @@
 </script>
 <script src="ext/jquery-ui.min.js?0a497d4661"></script>
 <script src="ext/select2.min.js?5f3d972dba"></script>
-<script src="ext/selectize.min.js?5949ba84ac"></script>
+<script src="ext/selectize.js?8f2e82aa2f"></script>
 <script src="ext/jquery.sparkline.min.js?56be28a164"></script>
 <script src="ext/jquery.overlayScrollbars.min.js?6ff0d68933"></script>
-<script src="js/cellBrowser.js?1665079273"></script>
-<script src="js/cbData.js?9c2e9e3eef"></script>
-<script src="js/maxPlot.js?17b316412e"></script>
+<script src="ext/jquery.event.drag-2.3.0.js?4c64b2e6a0"></script>
+<script src="ext/lz-string.js?0da1a79b20"></script>
+<script src="ext/slick.core.js?773c35f16f"></script>
+<script src="ext/slick.cellrangedecorator.js?2c81dc6d9e"></script>
+<script src="ext/slick.cellrangeselector.js?9644c6fe37"></script>
+<script src="ext/slick.cellselectionmodel.js?c4717ba900"></script>
+<script src="ext/slick.editors.js?1a8c0558f8"></script>
+<script src="ext/slick.formatters.js?f9f6d44cb1"></script>
+<script src="ext/slick.grid.js?5f6cff6f9f"></script>
+<script src="ext/tiny-queue.js?85706fbfe8"></script>
+<script src="ext/science.v1.js?56ca666d46"></script>
+<script src="ext/reorder.v1.js?57c1c948af"></script>
+<script src="js/cellBrowser.js?efb980d615"></script>
+<script src="js/cbData.js?7b865a4531"></script>
+<script src="js/maxPlot.js?5e71051c70"></script>
+<script src="js/maxHeat.js?44239cd8aa"></script>
 </head>
 <body>
 <script>
-var datasetList = [
+var datasets = [
     {
-        "name": "Lung_Regeneration_LPS",
+        "md5": "d07fe03d40",
+        "name": "lung_regeneration_lps_model",
         "sampleCount": 11020,
-        "shortLabel": "Lung_Regeneration_LPS"
+        "shortLabel": "lung_regeneration_lps_model"
     }
 ];
-cellbrowser.loadData(datasetList);
+cellbrowser.loadData(datasets);
 </script>
 </body>
 </html>
