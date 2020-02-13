@@ -9,7 +9,6 @@
   "enumFields": [
     "sample_id",
     "condition",
-    "technical_replicate",
     "clusters",
     "cell_types"
   ],

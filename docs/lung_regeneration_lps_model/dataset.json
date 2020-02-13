@@ -6,15 +6,15 @@
   "fileVersions": {
     "inMeta": {
       "fname": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/final_files/cellbrowser_v2/lung_regeneration_lps_model/meta.tsv",
-      "md5": "ca10289be6",
-      "size": 1481220,
-      "mtime": "2020-02-13 00:54:10"
+      "md5": "61a965eb5d",
+      "size": 1452980,
+      "mtime": "2020-02-13 02:14:40"
     },
     "outMeta": {
       "fname": "cellbrowser_v2/lung/lung_regeneration_lps_model/meta.tsv",
-      "md5": "ca10289be6",
-      "size": 1481220,
-      "mtime": "2020-02-13 00:54:13"
+      "md5": "61a965eb5d",
+      "size": 1452980,
+      "mtime": "2020-02-13 02:14:42"
     },
     "inMatrix": {
       "fname": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/final_files/cellbrowser_v2/lung_regeneration_lps_model/exprMatrix.tsv.gz",
@@ -30,9 +30,9 @@
     },
     "conf": {
       "fname": "/Users/kriemo/Projects/publication_repos/lung-scrna/results/final_files/cellbrowser_v2/lung_regeneration_lps_model/cellbrowser.conf",
-      "md5": "346f6e3637",
-      "size": 594,
-      "mtime": "2020-02-13 00:54:10"
+      "md5": "351a46861c",
+      "size": 571,
+      "mtime": "2020-02-13 02:14:40"
     }
   },
   "sampleCount": 11020,
@@ -44,7 +44,7 @@
       "type": "uniqueString",
       "maxSize": 34,
       "diffValCount": 11020,
-      "md5": "dc0033cb0a"
+      "md5": "fb3f03181f"
     },
     {
       "name": "sampleid",
@@ -106,7 +106,7 @@
       ],
       "arrType": "Uint8",
       "diffValCount": 10,
-      "md5": "cdb2c704ec"
+      "md5": "40625166aa"
     },
     {
       "name": "condition",
@@ -133,29 +133,7 @@
       ],
       "arrType": "Uint8",
       "diffValCount": 3,
-      "md5": "427cf42a53"
-    },
-    {
-      "name": "technicalreplicate",
-      "label": "technical_replicate",
-      "type": "enum",
-      "colors": [
-        "ff9896",
-        "c7c7c7"
-      ],
-      "valCounts": [
-        [
-          "1",
-          5747
-        ],
-        [
-          "2",
-          5273
-        ]
-      ],
-      "arrType": "Uint8",
-      "diffValCount": 2,
-      "md5": "3022a453c0"
+      "md5": "1bd17fe2a2"
     },
     {
       "name": "GFPexpression",
@@ -163,7 +141,7 @@
       "arrType": "float32",
       "type": "float",
       "diffValCount": 158,
-      "md5": "cf9703759e"
+      "md5": "82866a5000"
     },
     {
       "name": "proporitionofUMIsasmitochondria",
@@ -171,7 +149,7 @@
       "arrType": "float32",
       "type": "float",
       "diffValCount": 10859,
-      "md5": "f2314e770d"
+      "md5": "1a440fd8b2"
     },
     {
       "name": "clusters",
@@ -263,7 +241,7 @@
       ],
       "arrType": "Uint8",
       "diffValCount": 16,
-      "md5": "08149c2b6f"
+      "md5": "b50241b7b2"
     },
     {
       "name": "celltypes",
@@ -304,7 +282,7 @@
           309
         ],
         [
-          "Injured AEC2: Early Transdifferentiating (Cell Cycle Arrest)",
+          "Injured AEC2: Early Transdifferentiating",
           309
         ],
         [
@@ -330,7 +308,7 @@
       ],
       "arrType": "Uint8",
       "diffValCount": 11,
-      "md5": "264d67b4b4"
+      "md5": "70f9d9087b"
     },
     {
       "name": "nCountRNA",
@@ -338,7 +316,7 @@
       "arrType": "float32",
       "type": "int",
       "diffValCount": 6942,
-      "md5": "80c689e3d1"
+      "md5": "b928fd7c8b"
     },
     {
       "name": "nFeatureRNA",
@@ -346,7 +324,7 @@
       "arrType": "float32",
       "type": "int",
       "diffValCount": 2512,
-      "md5": "6e1c68c2ca"
+      "md5": "df31dc6697"
     }
   ],
   "matrixArrType": "Float32",
@@ -365,8 +343,8 @@
     }
   ],
   "descMd5s": {
-    "summary": "b15deb563b"
+    "summary": "c9bd5703cf"
   },
   "markers": [],
-  "md5": "d07fe03d40"
+  "md5": "581341c0dd"
 }
