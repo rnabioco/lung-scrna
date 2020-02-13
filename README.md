@@ -7,4 +7,4 @@ Analysis code related to characterizing lung regeneration induced by LPS using s
 
 Sequencing data is available from [GEO series GSE113049](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?&acc=GSE113049)
 
-A UCSC interactive cellbrowser containing the data is also available [here](http://amc-sandbox.ucdenver.edu/User33/browser/lung/?ds=Lung_Regeneration_LPS)
+A UCSC interactive cellbrowser containing the data is also available [here](https://rnabioco.github.io/lung-scrna/)
